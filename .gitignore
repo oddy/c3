@@ -1,4 +1,7 @@
 
+# test artifacts
+*.b64
+
 # pyc & test
 *.pyc 
 __pycache__/
