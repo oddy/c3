@@ -1,6 +1,7 @@
 
 # test artifacts
 *.b64
+*.b64.txt
 
 # pyc & test
 *.pyc 
