@@ -177,15 +177,22 @@ def WriteFiles(name, public_part, private_part=b"", combine=True, desc=""):
 
 
 def LoadFiles(name):
+    pub_block = b""
+    priv_block = b""
+    header_rex = r"^-+\[ (.*?) \]-+$"
+
     combine_name = name + ".b64.txt"
     if os.path.isfile(combine_name):
-        print("Loading ", combine_name)
+        # --------------------------------- Combined mode file ---------------------------------
+        print("Loading combined file ", combine_name)
         both_strs = open(combine_name,"r").read()
+
         # regex cap the header lines
-        header_rex = r"^-+\[ (.*?) \]-+$"
+
         hdrs = list(re.finditer(header_rex, both_strs, re.MULTILINE))
         if len(hdrs) != 2:
             print(" Error: number of headers in combined file is not 2")
+
         # Structure: first header, first data, second header, second data, end of file
         # data offsets are end-of-first-header : start-of-second-header,
         block0_b64 = both_strs[hdrs[0].end() : hdrs[1].start()]
@@ -198,14 +205,42 @@ def LoadFiles(name):
 
         # normally the second block is the private block, but if a user has shuffled things around
         # we cater for that by checking which block has 'PRIVATE' in its header description
-        if "PRIVATE" in hdrs[0].group(1):
-            # Private block comes first (not the normal case)
-            print("not normal")
-            return block1, block0       # public, private
-        else:
-            # Otherwise assume the public block comes first.
+        if "PRIVATE" in hdrs[0].group(1):       # Private block comes first (not the normal case)
+            pub_block, priv_block = block1, block0
+        else:   # Otherwise assume the public block comes first.
             print("normal")
-            return block0, block1       # public, private
+            pub_block, priv_block = block0, block1
+
+    pub_only_name = name + ".public.b64.txt"
+    if os.path.isfile(pub_only_name):
+        print("Loading public file ", pub_only_name)
+        pub_str = open(pub_only_name, "r").read()
+        hdrs = list(re.finditer(header_rex, pub_str, re.MULTILINE))
+        if len(hdrs) != 1:
+            print(" Error: too many headers in public file")
+        pub_block_b64 = pub_str[hdrs[0].end():]
+        pub_block = base64.b64decode(pub_block_b64)
+
+    priv_only_name = name + ".PRIVATE.b64.txt"
+    if os.path.isfile(priv_only_name):
+        print("Loading private file ", priv_only_name)
+        priv_str = open(priv_only_name, "r").read()
+        hdrs = list(re.finditer(header_rex, priv_str, re.MULTILINE))
+        if len(hdrs) != 1:
+            print(" Error: too many headers in private file")
+        priv_block_b64 = priv_str[hdrs[0].end():]
+        priv_block = base64.b64decode(priv_block_b64)
+
+    return pub_block, priv_block
+
+
+
+
+
+
+
+
+
 
 
     # ---- D I M E N S I O N S ----
