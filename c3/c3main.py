@@ -18,8 +18,8 @@ SIG_SCHEMA = (
 
 )
 
-CERT_AND_SIG = (
-    (b3.BYTES, "cert_bytes", 1),
+DATA_AND_SIG = (
+    (b3.BYTES, "data_bytes", 1),
     (b3.BYTES, "sig_bytes", 2),
 )
 
@@ -45,6 +45,10 @@ def CommandlineMain():
 
     if cmd == "makesignerusingsigner":
         MakeSignerUsingSigner(args)
+        return
+
+    if cmd == "signpayload":
+        SignPayload(args)
         return
 
     if cmd == "verify":
@@ -86,11 +90,14 @@ def MakeSignerSelfSigned(args):
     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
     # wrap cert and sig together
-    cas = AttrDict(cert_bytes=pub_cert_bytes, sig_bytes=sig_bytes)
-    cas_bytes = b3.schema_pack(CERT_AND_SIG, cas)
+    das = AttrDict(data_bytes=pub_cert_bytes, sig_bytes=sig_bytes)
+    das_bytes = b3.schema_pack(DATA_AND_SIG, das)
+
+    # prepend header for das itself so straight concatenation makes a list-of-das
+    das_bytes_with_hdr = b3.encode_item_joined(None, b3.DICT, das_bytes)
 
     # Save to combined file.
-    WriteFiles(args.name, cas_bytes, priv_bytes, combine=True)
+    WriteFiles(args.name, das_bytes_with_hdr, priv_bytes, combine=True)
 
     return
 
@@ -116,49 +123,117 @@ def MakeSignerUsingSigner(args):
     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
     # wrap cert & sig
-    cas = AttrDict(cert_bytes=pub_cert_bytes, sig_bytes=sig_bytes)
-    cas_bytes = b3.schema_pack(CERT_AND_SIG, cas)
+    das = AttrDict(data_bytes=pub_cert_bytes, sig_bytes=sig_bytes)
+    das_bytes = b3.schema_pack(DATA_AND_SIG, das)
+
+    # prepend header for das itself so straight concatenation makes a list-of-das
+    das_bytes_with_hdr = b3.encode_item_joined(None, b3.DICT, das_bytes)
 
     # concat using's public with our cas
-    output_public = using_public_part + cas_bytes
+    output_public = using_public_part + das_bytes_with_hdr
 
     # Save to combined file.
     WriteFiles(args.name, output_public, priv_bytes, combine=True)
 
 
 
+def SignPayload(args):
+    for req_arg in ("name","using"):       # using name as the input filename too atm.
+        if req_arg not in args:
+            UsageBail("please supply --%s=" % (req_arg,))
+
+    # ---- Load signer & ready the ecdsa object ----
+    using_public_part, using_private_part = LoadFiles(args.using)
+    SK = ecdsa.SigningKey.from_string(using_private_part, ecdsa.NIST256p)
+
+    # load payload
+    payload_bytes = open(args.name, "rb").read()
+
+    # sign it, make sig
+    sig_d = AttrDict(sig_bytes=SK.sign(payload_bytes))
+    sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
+
+    # wrap payload & sig
+    das = AttrDict(data_bytes=payload_bytes, sig_bytes=sig_bytes)
+    das_bytes = b3.schema_pack(DATA_AND_SIG, das)
+
+    # prepend header for das itself so straight concatenation makes a list-of-das
+    das_bytes_with_hdr = b3.encode_item_joined(None, b3.DICT, das_bytes)
+
+    # concat using's public with our cas
+    output_public = using_public_part + das_bytes_with_hdr
+
+    # Save to combined file.
+    WriteFiles(args.name, output_public, b"", combine=False)    # wont write private_part if its empty
+
+
+# step 1: just verify the in-place stuff. So we're temporarily ignoring the fact that there's no seperate root pub key,
+#         and our root pub key is part of the incoming payload concatenation
+# step 2: write the seeker after this.
 
 
 
+# Expects a list of the same schema object. This should eventually be part of b3.
+# the schema objects need headers in an e.g. with_header way.
+# so, list item headers in the case of a list of DAS objects.
 
+def list_of_schema_unpack(schema, buf):
+    end = len(buf)
+    index = 0
+    out = []
+    while index < end:
+        print("decoding header, index=",index)
+        key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)
+        print("key %r  data_type %r  has %r  null %r  len %r  index %r" % (key,data_type,has_data,is_null,data_len,index))
 
+        assert key is None  # we dont care about key (we are a list not dicts so there shouldn't be any keys)
+        assert has_data is True
+        assert is_null is False
+        assert data_type == b3.DICT
+        assert data_len > 0
+        # decode_value will just get us the bytes
+        # Note: we could make a super simplified b3 decode_header that just extracts data_len here
+        #       (and asserts data_type is dict, has_data true, not_null true, etc)
+        #       favour rigour over performace ? these aren't hotpath apart from ACMD messages which get swamped by the ecdsa verify anyway.
+        #       but then we could also make this a b3 function itself anyway.
+        das_bytes = b3.item.decode_value(data_type, has_data, is_null, data_len, buf, index)
 
-
-
-
-
-
-
-
-
-
-
-
-
+        # Now unpack the actual dict too
+        dx = b3.schema_unpack(schema, das_bytes)
+        out.append(dx)
+        index += data_len
+    return out
 
 
 def Verify(args):
-    cas_b64 = open("cas.b64", "rb").read()
-    cas_bytes = base64.b64decode(cas_b64)
-    cas = AttrDict(b3.schema_unpack(CERT_AND_SIG, cas_bytes))
-    print(cas)
-    cert = AttrDict(b3.schema_unpack(CERT_SCHEMA, cas.cert_bytes))  # note we use cert_bytes HERE
 
-    # verify selfsign - certs pubkey and cas.sig_bytes
-    print("Verifying using cert named: ", cert.name)
-    verify_key = ecdsa.VerifyingKey.from_string(cert.pub_key, ecdsa.NIST256p)
-    ret = verify_key.verify(cas.sig_bytes, cas.cert_bytes)          # and also HERE
-    print("Verify ret: ",repr(ret))
+    # temporarily not using --using, everything coming from the signed-payload-file
+
+    public_part, private_part = LoadFiles(args.name)
+    print("pub:",public_part)
+    print()
+    print("priv:",private_part)
+
+    # Should be a list of DAS structures, so pythonize the list
+    das_list = list_of_schema_unpack(DATA_AND_SIG, public_part)
+
+    print()
+    pprint(das_list)
+
+
+
+    #
+    # cas_b64 = open("cas.b64", "rb").read()
+    # cas_bytes = base64.b64decode(cas_b64)
+    # cas = AttrDict(b3.schema_unpack(CERT_AND_SIG, cas_bytes))
+    # print(cas)
+    # cert = AttrDict(b3.schema_unpack(CERT_SCHEMA, cas.cert_bytes))  # note we use cert_bytes HERE
+    #
+    # # verify selfsign - certs pubkey and cas.sig_bytes
+    # print("Verifying using cert named: ", cert.name)
+    # verify_key = ecdsa.VerifyingKey.from_string(cert.pub_key, ecdsa.NIST256p)
+    # ret = verify_key.verify(cas.sig_bytes, cas.cert_bytes)          # and also HERE
+    # print("Verify ret: ",repr(ret))
 
 
 # Policy: names are short and become the filename. They can go in the cert too.
@@ -202,6 +277,9 @@ def WriteFiles(name, public_part, private_part=b"", combine=True, desc=""):
         with open(fname, "w") as f:
             f.write("\n"+pub_str+"\n")
         print("Wrote public file:  ", fname)
+
+        if not private_part:
+            return
 
         fname = name + ".PRIVATE.b64.txt"
         with open(fname, "w") as f:
