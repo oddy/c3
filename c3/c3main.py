@@ -14,7 +14,8 @@ CERT_SCHEMA = (
     )
 
 SIG_SCHEMA = (
-    (b3.BYTES, "sig_bytes", 1)
+    (b3.BYTES, "sig_bytes", 1),
+
 )
 
 CERT_AND_SIG = (
@@ -38,8 +39,12 @@ def CommandlineMain():
     cmd = sys.argv[1].lower()
     args = ArgvArgs()
 
-    if cmd == "makesigner":
-        MakeSigner(args)
+    if cmd == "makesignerselfsigned":
+        MakeSignerSelfSigned(args)
+        return
+
+    if cmd == "makesignerusingsigner":
+        MakeSignerUsingSigner(args)
         return
 
     if cmd == "verify":
@@ -63,14 +68,13 @@ def GenKeysECDSANist256p():
 
 MAKESIGNER_REQ_ARGS = ("name", ) # "expiry")  # ,"using", "output")
 
-def MakeSigner(args):
+def MakeSignerSelfSigned(args):
     for req_arg in MAKESIGNER_REQ_ARGS:
         if req_arg not in args:
             UsageBail("please supply --%s=" % (req_arg,))
 
     # make keys
     priv_bytes, pub_bytes = GenKeysECDSANist256p()
-    priv_b64 = base64.b64encode(priv_bytes)     # note is bytes
 
     # make pub cert for pub key
     pub_cert = AttrDict(name=args.name, pub_key=pub_bytes)
@@ -81,23 +85,66 @@ def MakeSigner(args):
     sig_d = AttrDict(sig_bytes=sk.sign(pub_cert_bytes))
     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
-
     # wrap cert and sig together
     cas = AttrDict(cert_bytes=pub_cert_bytes, sig_bytes=sig_bytes)
     cas_bytes = b3.schema_pack(CERT_AND_SIG, cas)
-    cas_b64 = base64.b64encode(cas_bytes)
 
-    # save cert-and-sig
-    with open("cas.b64", "wb") as f:
-        f.write(cas_b64)
-    print(" wrote cas.b64")
-
-    # save private key
-    with open("priv.b64", "wb") as f:
-        f.write(priv_b64)
-    print(" write priv.b64")
+    # Save to combined file.
+    WriteFiles(args.name, cas_bytes, priv_bytes, combine=True)
 
     return
+
+
+def MakeSignerUsingSigner(args):
+    for req_arg in ("name", "using"):
+        if req_arg not in args:
+            UsageBail("please supply --%s=" % (req_arg,))
+
+    # ---- Load signer & ready the ecdsa object ----
+    using_public_part, using_private_part = LoadFiles(args.using)
+    SK = ecdsa.SigningKey.from_string(using_private_part, ecdsa.NIST256p)
+
+    # make keys
+    priv_bytes, pub_bytes = GenKeysECDSANist256p()
+
+    # make pub cert
+    pub_cert = AttrDict(name=args.name, pub_key=pub_bytes)
+    pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, pub_cert)
+
+    # sign it, make sig
+    sig_d = AttrDict(sig_bytes=SK.sign(pub_cert_bytes))
+    sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
+
+    # wrap cert & sig
+    cas = AttrDict(cert_bytes=pub_cert_bytes, sig_bytes=sig_bytes)
+    cas_bytes = b3.schema_pack(CERT_AND_SIG, cas)
+
+    # concat using's public with our cas
+    output_public = using_public_part + cas_bytes
+
+    # Save to combined file.
+    WriteFiles(args.name, output_public, priv_bytes, combine=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def Verify(args):
@@ -146,19 +193,19 @@ def WriteFiles(name, public_part, private_part=b"", combine=True, desc=""):
     if combine:
         fname = name + ".b64.txt"
         with open(fname, "w") as f:
-            f.write(pub_str)
+            f.write("\n"+pub_str)
             f.write("\n")
-            f.write(priv_str)
+            f.write(priv_str+"\n")
         print("Wrote combined file: ",fname)
     else:
         fname = name + ".public.b64.txt"
         with open(fname, "w") as f:
-            f.write(pub_str)
+            f.write("\n"+pub_str+"\n")
         print("Wrote public file:  ", fname)
 
         fname = name + ".PRIVATE.b64.txt"
         with open(fname, "w") as f:
-            f.write(priv_str)
+            f.write("\n"+priv_str+"\n")
         print("Wrote PRIVATE file: ", fname)
 
 
