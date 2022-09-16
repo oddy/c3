@@ -130,7 +130,7 @@ def MakeSignerUsingSigner(args):
     das_bytes_with_hdr = b3.encode_item_joined(None, b3.DICT, das_bytes)
 
     # concat using's public with our cas
-    output_public = using_public_part + das_bytes_with_hdr
+    output_public = das_bytes_with_hdr + using_public_part
 
     # Save to combined file.
     WriteFiles(args.name, output_public, priv_bytes, combine=True)
@@ -161,7 +161,7 @@ def SignPayload(args):
     das_bytes_with_hdr = b3.encode_item_joined(None, b3.DICT, das_bytes)
 
     # concat using's public with our cas
-    output_public = using_public_part + das_bytes_with_hdr
+    output_public = das_bytes_with_hdr + using_public_part
 
     # Save to combined file.
     WriteFiles(args.name, output_public, b"", combine=False)    # wont write private_part if its empty
@@ -200,7 +200,7 @@ def list_of_schema_unpack(schema, buf):
 
         # Now unpack the actual dict too
         dx = b3.schema_unpack(schema, das_bytes)
-        out.append(dx)
+        out.append(AttrDict(dx))
         index += data_len
     return out
 
@@ -210,15 +210,40 @@ def Verify(args):
     # temporarily not using --using, everything coming from the signed-payload-file
 
     public_part, private_part = LoadFiles(args.name)
-    print("pub:",public_part)
-    print()
-    print("priv:",private_part)
 
     # Should be a list of DAS structures, so pythonize the list
     das_list = list_of_schema_unpack(DATA_AND_SIG, public_part)
 
-    print()
-    pprint(das_list)
+    # unpack the certs & sigs in das_list
+    for das in das_list:
+        das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_bytes))     # creates a 'none none' cert entry for the payload das.
+        das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_bytes))
+
+        print()
+        pprint(das)
+
+    # ok we got payload bytes (das.data_bytes) and sig bytes (das.sig.sig_bytes)
+
+    for i,das in enumerate(das_list):
+
+        # seek the signing cert for the sig (currently just the next in line)
+        next_das = das_list[i+1]
+        issuer_cert_pub_key_bytes = next_das.cert.pub_key
+
+        # make ecdsa VK
+        VK = ecdsa.VerifyingKey.from_string(issuer_cert_pub_key_bytes, ecdsa.NIST256p)
+
+        # Do verify
+        ret = VK.verify(das.sig.sig_bytes, das.data_bytes)
+        print("Verifying name ", das.cert.name, " returns ",ret)
+
+        # we dont have a current indicator that the end is self-signed.
+        # next step is to add issuer-names to the sigs.
+
+
+
+
+
 
 
 
