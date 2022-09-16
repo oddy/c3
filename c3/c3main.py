@@ -15,7 +15,7 @@ CERT_SCHEMA = (
 
 SIG_SCHEMA = (
     (b3.BYTES, "sig_bytes", 1),
-
+    (b3.UTF8, "issuer_name", 2),
 )
 
 DATA_AND_SIG = (
@@ -26,6 +26,94 @@ DATA_AND_SIG = (
 class AttrDict(dict):
     def __getattr__(self, name):
         return self[name]
+
+
+
+
+
+# pretty much decide if this errors using exceptions, or returncodes.
+# Leaning towards exceptions, but make them as user friendly as possible.
+
+# StructureError etc are good.
+
+
+def Verify(args):
+    certs_by_name = {}      # used when cert name lookup is needed.
+
+    # temporarily not using --using, everything coming from the signed-payload-file
+
+    public_part, private_part = LoadFiles(args.name)
+
+    # Should be a list of DAS structures, so pythonize the list
+    das_list = list_of_schema_unpack(DATA_AND_SIG, public_part)
+
+    # unpack the certs & sigs in das_list
+    for das in das_list:
+        das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_bytes))     # creates a 'none none' cert entry for the payload das.
+        das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_bytes))
+        # update name:cert map/index.  (This will later have the root cert in it, and can be a cache.)
+        certs_by_name[das.cert.name] = das.cert
+        print()
+        pprint(das)
+
+    print()
+    print()
+
+    # ok we got payload bytes (das.data_bytes) and sig bytes (das.sig.sig_bytes)
+
+    for i,das in enumerate(das_list):
+
+        # seek the signing cert for the sig
+        issuer_name = das.sig.issuer_name
+        print("sig issuer name is ",repr(issuer_name))
+
+        # if it's empty, that means "next cert in the chain"
+        if not issuer_name:
+            print("no issuer name, assuming next cert in chain is the signer")
+            next_das = das_list[i + 1]
+            issuer_cert_pub_key_bytes = next_das.cert.pub_key
+        else:
+            print("got issuer name, looking up in certs_by_name")
+            issuer_cert = certs_by_name[issuer_name]
+            print("got cert")
+            issuer_cert_pub_key_bytes = issuer_cert.pub_key
+
+
+        # make ecdsa VK
+        VK = ecdsa.VerifyingKey.from_string(issuer_cert_pub_key_bytes, ecdsa.NIST256p)
+
+        # Do verify
+        ret = VK.verify(das.sig.sig_bytes, das.data_bytes)
+        print("Verifying name ", das.cert.name, " returns ",ret)  # says "None" for first because its not a cert.
+
+        # next step is to add issuer-names to the sigs.
+
+    print("\nok we got to the end")
+    # if root1 is self-signed we get here now and everything is happy
+    # BECAUSE, the loop doesn't try and access the next cert at the end and blow up like it did before
+    # and the loop gets to complete!
+
+
+
+
+    # just use the name as the ID for now.
+
+
+
+
+    #
+    # cas_b64 = open("cas.b64", "rb").read()
+    # cas_bytes = base64.b64decode(cas_b64)
+    # cas = AttrDict(b3.schema_unpack(CERT_AND_SIG, cas_bytes))
+    # print(cas)
+    # cert = AttrDict(b3.schema_unpack(CERT_SCHEMA, cas.cert_bytes))  # note we use cert_bytes HERE
+    #
+    # # verify selfsign - certs pubkey and cas.sig_bytes
+    # print("Verifying using cert named: ", cert.name)
+    # verify_key = ecdsa.VerifyingKey.from_string(cert.pub_key, ecdsa.NIST256p)
+    # ret = verify_key.verify(cas.sig_bytes, cas.cert_bytes)          # and also HERE
+    # print("Verify ret: ",repr(ret))
+
 
 
 # Step 1: make 'makesigner' command.  With self-sign.
@@ -86,7 +174,7 @@ def MakeSignerSelfSigned(args):
 
     # self-sign it, make sig
     sk = ecdsa.SigningKey.from_string(priv_bytes, ecdsa.NIST256p)
-    sig_d = AttrDict(sig_bytes=sk.sign(pub_cert_bytes))
+    sig_d = AttrDict(sig_bytes=sk.sign(pub_cert_bytes), issuer_name=args.name)      # issuer == us bc self-sign
     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
     # wrap cert and sig together
@@ -203,63 +291,6 @@ def list_of_schema_unpack(schema, buf):
         out.append(AttrDict(dx))
         index += data_len
     return out
-
-
-def Verify(args):
-
-    # temporarily not using --using, everything coming from the signed-payload-file
-
-    public_part, private_part = LoadFiles(args.name)
-
-    # Should be a list of DAS structures, so pythonize the list
-    das_list = list_of_schema_unpack(DATA_AND_SIG, public_part)
-
-    # unpack the certs & sigs in das_list
-    for das in das_list:
-        das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_bytes))     # creates a 'none none' cert entry for the payload das.
-        das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_bytes))
-
-        print()
-        pprint(das)
-
-    # ok we got payload bytes (das.data_bytes) and sig bytes (das.sig.sig_bytes)
-
-    for i,das in enumerate(das_list):
-
-        # seek the signing cert for the sig (currently just the next in line)
-        next_das = das_list[i+1]
-        issuer_cert_pub_key_bytes = next_das.cert.pub_key
-
-        # make ecdsa VK
-        VK = ecdsa.VerifyingKey.from_string(issuer_cert_pub_key_bytes, ecdsa.NIST256p)
-
-        # Do verify
-        ret = VK.verify(das.sig.sig_bytes, das.data_bytes)
-        print("Verifying name ", das.cert.name, " returns ",ret)
-
-        # we dont have a current indicator that the end is self-signed.
-        # next step is to add issuer-names to the sigs.
-
-
-
-
-
-
-
-
-    #
-    # cas_b64 = open("cas.b64", "rb").read()
-    # cas_bytes = base64.b64decode(cas_b64)
-    # cas = AttrDict(b3.schema_unpack(CERT_AND_SIG, cas_bytes))
-    # print(cas)
-    # cert = AttrDict(b3.schema_unpack(CERT_SCHEMA, cas.cert_bytes))  # note we use cert_bytes HERE
-    #
-    # # verify selfsign - certs pubkey and cas.sig_bytes
-    # print("Verifying using cert named: ", cert.name)
-    # verify_key = ecdsa.VerifyingKey.from_string(cert.pub_key, ecdsa.NIST256p)
-    # ret = verify_key.verify(cas.sig_bytes, cas.cert_bytes)          # and also HERE
-    # print("Verify ret: ",repr(ret))
-
 
 # Policy: names are short and become the filename. They can go in the cert too.
 #         Skip IDs for now.
