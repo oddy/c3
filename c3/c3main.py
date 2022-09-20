@@ -284,6 +284,52 @@ def Verify(args):
 
         print("Verifying ", vname, " returns ",ret)
 
+
+    # There are 3 ways for this to fail:
+    # 1) "fell off" - unnamed issuer cert and no next cert in line
+    # 2) Cant Find Named Cert - in the cert store / trust store / certs_by_name etc
+    # 3) Last cert is self-signed and verified OK but isn't in the trust store.
+
+    # So its about "getting to" the pretrusted cert(s).
+    # Once we're in the trust store we can stop, and return success.
+    # - along with the payload, if ppkey says there is a payload.
+
+    # (1) - fail trying to pull next_das.
+    # (2) - cert not found in certs_by_name.
+    # (3) - at the end but trust_store flag is not on (or something).
+
+    # TODO TOMORROW:
+
+    # 1) make inter1 that asks for root1 by name, instead of having root1 tacked on.
+    # 2) make basic trust store, put root1 in it.
+    # 3) run verify with (1) and (2)
+    # 4) make test data root/inter/payload certs that exercise (1)(2)(3) scenarios.
+    # 5) make the error messages be nice for all of (4)
+    # 6) yield true and payload else raise exception with nice error message.
+
+    # 7) it would be nice to get multisig in at this point?
+    # 8) make the code nice with classes and stuff, big clean up of the verify side
+    # 9) then big clean up of the sign/make side
+
+    # AND THEN
+
+    # multi-signature
+    # keytypes & libsodium & libsodium loading
+    # passprotect porting to b3
+    # File saving, split/combine & ascii                [MOSTLY DONE]
+    # File loading, --using, split/combine & ascii      [MOSTLY DONE]
+    # signing expiry dates
+    # clean up commandline API and function call API
+    # list-signatures, multi cert seeking, building a chain, looping through a chain.  [MOSTLY DONE]
+    # Turning the chain into python data structure  [DONE]
+    # libsodium and how things are gonna have to be a class for libsodium, so it can load its DLL on startup.
+    # vetting the libsodium dlls with a hash. (we need this because then they vet everything else)
+
+    # THEN
+
+    # 10) ascii fields
+    # 11) release!
+
     print()
     print("YAY we got to the end")
     # if root1 is self-signed we get here now and everything is happy
@@ -617,71 +663,6 @@ def LoadFiles(name):
 
 
 
-
-
-
-    # ---- D I M E N S I O N S ----
-
-    # keytypes & libsodium & libsodium loading
-    # passprotect porting to b3
-    # File saving, split/combine & ascii
-    # File loading, --using, split/combine & ascii
-
-    # list-signatures, multi cert seeking, building a chain, looping through a chain.
-    # Turning the chain into python data structure
-
-
-
-
-
-    # libsodium and how things are gonna have to be a class for libsodium, so it can load its DLL on startup.
-    # vetting the libsodium dlls with a hash. (we need this because then they vet everything else)
-
-
-    # the Using loader
-    # the file savers
-
-    # libsodium
-
-    # multi-signature
-    # - the b3 list-of-schemaDicts function.
-
-    # We need to make Tests for the list-of-schemaDicts stuff.
-    # cant test without file saving/loading so
-
-
-
-    # The next step for us is chain-signing.
-
-
-
-
-    # MAKESIGNER TODO:
-
-    # make priv and pub keypair bytes
-    # pub + expiry + name -> cert bytes
-    # sign cert bytes with priv, make sig bytes
-
-    # output a simple base64 of the pub and of the priv.
-    # enough to simple-load and run verify.
-
-    # -----------------------------------------------------------------------
-
-    # Takes a password for crypting the private key (ideally twice)
-    # outputs e.g. root1.public.txt and root1.PRIVATE.txt
-    # --using=self first.
-
-    # turn priv into an encrypted priv
-    # output priv in a nice texty way
-
-    # turn pub into a cert then cert bytes
-    # load the --using cert
-    # sign the cert bytes, make a signature bytes
-
-    # glue the signature and cert bytes together
-    # add the chain bytes (?)
-
-    # output in a nice texty way
 
 
 
