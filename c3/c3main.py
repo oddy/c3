@@ -5,53 +5,203 @@ import sys, re, base64, os
 from pprint import pprint
 
 import b3
+b3.composite_schema.strict_mode = True   # fails if we get field names wrong when schema_packing
 import ecdsa
 
+# So far we dont have any optional fields.
+
+# tag/key values (mostly for sanity checking)
+# level0
+KEY_PAYLOAD_DAS_LIST = 55       # just not 0 or 1 etc.
+KEY_CERT_DAS_LIST = 66
+# level1
+KEY_DAS = 77
+
+
 CERT_SCHEMA = (
-    (b3.UTF8,  "name",  1),
-    (b3.BYTES, "pub_key", 2),
+    (b3.UTF8,  "name",  1, True),
+    (b3.BYTES, "pub_key", 2, True),
     # (b3.SCHED, "expiry", 3),
     )
 
 SIG_SCHEMA = (
-    (b3.BYTES, "sig_bytes", 1),
-    (b3.UTF8, "issuer_name", 2),
+    (b3.BYTES, "sig_val", 1,  True),
+    (b3.UTF8, "issuer_name", 2, False),     # field value can be optional
 )
 
 DATA_AND_SIG = (
-    (b3.BYTES, "data_bytes", 1),
-    (b3.BYTES, "sig_bytes", 2),
+    (b3.BYTES, "data_bytes", 1, True),
+    (b3.BYTES, "sig_bytes", 2, True),
 )
+
 
 class AttrDict(dict):
     def __getattr__(self, name):
         return self[name]
 
+# What we have to do to test it.
+# Make selfsigned root1, make inter1, make
+
+# Errors
+class C3Error(ValueError):
+    pass
+class SignatureFail(C3Error):
+    pass
+class StructureError(C3Error):
+    pass
+
+# class CertError(C3Error):           pass
+# class ChainError(C3Error):          pass
+# class SigningCertError(CertError):  pass
+# class PayloadCertError(CertError):  pass              # SignedCertError ? idk
 
 
 
 
-# pretty much decide if this errors using exceptions, or returncodes.
-# Leaning towards exceptions, but make them as user friendly as possible.
+# TODO NEXT:  stash root1 in code, load it into certs_by_name.
+# Note: ensure that the global, class-ified certs_by_name cant have certs stored into it before they are VERIFIED.
+#       this means that certs_by_name has to be bootstrapped with an in-code cert or a file load, before the network messages come.
+# Then class-ify everything
+# then error handling for Verify, ALL the error handling.
+# THEN we go back and make the builders real nice.
 
-# StructureError etc are good.
+# just use the name as the ID for now.
+
+#
+# # unanswered questions: how best to store a cert in code?
+# # unanswered questions: do we verify the selfsigned root using itself? or just trust it because it is here.
+# ROOT1_CODE = """
+# 6JwBCQFLGQEFcm9vdDEJAkC9I6MGAUU1BiYhFcTUPF75NSgvyL4TAOMynR8eIChCMzVGVamff/+X
+# Kptia/EVarhvFSDFCMAcBlch4NCJ4PSXCQJLCQFAnOusYBYEbjhXo5Quujy2fEz1lvtyPbMUd6+k
+# pgl5/IAhhoSnwU9zfv86aA8WVBQ37z7XYg5xHBcylN8Zmb3JOhkCBXJvb3Qx
+# """
+# # ^^ actually this should be a das
+# root1_das_bytes = base64.b64decode(ROOT1_CODE)
+# root1_das = AttrDict(b3.schema_unpack(DATA_AND_SIG, root1_das_bytes))
+# print(root1_das)
+# # We need an unpack_and_structure_validate function, like the old version's Expect()
+# # Maybe it can be called Expect.
+# # Expect can Expect the tag values to be certain values.
+# # we can have a tag value for a "payload das" and a tag value for a "cert das"
+# # It will return an AttrDict.
+#
+#
+# # We need a Really Good Diagram of how the data structure works currently so we can see if we can make Expect recursive etc.
+#
+# # The lists need a Header
+# # The header gets prepended on write because build is straight concatenating
+# # The header can get 'shucked' by list_of_schema_unpack as we load lists.
+#
+#
+# root1_cert = AttrDict(b3.schema_unpack(CERT_SCHEMA, root1_das.data_bytes))
+# print(root1_cert)
+#
+#
+# # pretty much decide if this errors using exceptions, or returncodes.
+# # Leaning towards exceptions, but make them as user friendly as possible.
+#
+# # StructureError etc are good.
+#
+# certs_by_name = {root1_cert.name : root1_cert}
+#
+
+certs_by_name = {}
+
+
+
+def schema_assert_mandatory_fields_truthy(schema, dx):
+    print()
+    print("=== schema assert truthy ===")
+    print("Schema:")
+    pprint(schema)
+    print("DX:")
+    pprint(dx)
+    for field_def in schema:                    # by name
+        # only check if mandatory bool flag is both present AND true.
+        print("Mando: ",field_def)
+        if len(field_def) > 3 and field_def[3] is True:
+            print("    - doing truthy check")
+            field_name = field_def[1]
+            if field_name not in dx:
+                raise StructureError("Required schema field '%s' is missing" % field_name)
+            if not dx[field_name]:
+                raise StructureError("Mandatory field '%s' is %r" % (field_name, dx[field_name]))
+        else:
+            print("    - NOT doing truthy check")
+    print()
+    print()
+
+
+
+# Expects a list of the same schema object. This should eventually be part of b3.
+# the schema objects need headers in an e.g. with_header way.
+# so, list item headers in the case of a list of DAS objects.
+
+def list_of_schema_unpack(schema, expect_item_keys, buf):
+    end = len(buf)
+    index = 0
+    out = []
+    while index < end:
+        print("decoding header, index",index)
+        key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)
+        print("   -> key %r  data_type %r  has %r  null %r  len %r  index %r" % (key,data_type,has_data,is_null,data_len,index))
+        assert key in expect_item_keys
+        assert has_data is True
+        assert is_null is False
+        assert data_type == b3.DICT
+        assert data_len > 0
+        # decode_value will just get us the bytes
+        # Note: we could make a super simplified b3 decode_header that just extracts data_len here
+        #       (and asserts data_type is dict, has_data true, not_null true, etc)
+        #       favour rigour over performace ? these aren't hotpath apart from ACMD messages which get swamped by the ecdsa verify anyway.
+        #       but then we could also make this a b3 function itself anyway.
+        das_bytes = b3.item.decode_value(data_type, has_data, is_null, data_len, buf, index)
+        assert len(das_bytes) > 0
+
+        # Now unpack the actual dict too
+        dx = b3.schema_unpack(schema, das_bytes)
+        schema_assert_mandatory_fields_truthy(schema, dx)     # make sure the field values are present
+        out.append(AttrDict(dx))
+        index += data_len
+    return out
+
+
+
+
+
+
+# Verify should output the payload if it's a "payload public part"
+# Which is driven by that little initial header.
+
 
 
 def Verify(args):
-    certs_by_name = {}      # used when cert name lookup is needed.
+    global certs_by_name
 
     # temporarily not using --using, everything coming from the signed-payload-file
 
     public_part, private_part = LoadFiles(args.name)
 
     # Should be a list of DAS structures, so pythonize the list
-    das_list = list_of_schema_unpack(DATA_AND_SIG, public_part)
+    das_list = list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)
+    #   - validated key=key_das
+    #   - type=dict is implicit to the function
+
+
 
     # unpack the certs & sigs in das_list
-    for das in das_list:
-        das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_bytes))     # creates a 'none none' cert entry for the payload das.
+
+    for i,das in enumerate(das_list):
+        das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_bytes))       # creates a 'none none' cert entry for the payload das.
         das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_bytes))
         # update name:cert map/index.  (This will later have the root cert in it, and can be a cache.)
+
+        if i > 0:
+            schema_assert_mandatory_fields_truthy(CERT_SCHEMA, das.cert)
+        schema_assert_mandatory_fields_truthy(SIG_SCHEMA, das.sig)
+
+        print("len of sig_actual_bytes", len(das.sig.sig_val))
+
         certs_by_name[das.cert.name] = das.cert
         print()
         pprint(das)
@@ -59,9 +209,13 @@ def Verify(args):
     print()
     print()
 
+
+
     # ok we got payload bytes (das.data_bytes) and sig bytes (das.sig.sig_bytes)
 
     for i,das in enumerate(das_list):
+        print()
+        print("next cert")
 
         # seek the signing cert for the sig
         issuer_name = das.sig.issuer_name
@@ -72,47 +226,28 @@ def Verify(args):
             print("no issuer name, assuming next cert in chain is the signer")
             next_das = das_list[i + 1]
             issuer_cert_pub_key_bytes = next_das.cert.pub_key
+        # if it's not, try to get the cert from our cache
+        # This will work for self-signed roots because their sig's issuer_name == their name
         else:
             print("got issuer name, looking up in certs_by_name")
             issuer_cert = certs_by_name[issuer_name]
             print("got cert")
             issuer_cert_pub_key_bytes = issuer_cert.pub_key
 
-
         # make ecdsa VK
         VK = ecdsa.VerifyingKey.from_string(issuer_cert_pub_key_bytes, ecdsa.NIST256p)
 
         # Do verify
-        ret = VK.verify(das.sig.sig_bytes, das.data_bytes)
+        ret = VK.verify(das.sig.sig_val, das.data_bytes)
         print("Verifying name ", das.cert.name, " returns ",ret)  # says "None" for first because its not a cert.
 
-        # next step is to add issuer-names to the sigs.
-
-    print("\nok we got to the end")
+    print()
+    print("YAY we got to the end")
     # if root1 is self-signed we get here now and everything is happy
     # BECAUSE, the loop doesn't try and access the next cert at the end and blow up like it did before
     # and the loop gets to complete!
 
 
-
-
-    # just use the name as the ID for now.
-
-
-
-
-    #
-    # cas_b64 = open("cas.b64", "rb").read()
-    # cas_bytes = base64.b64decode(cas_b64)
-    # cas = AttrDict(b3.schema_unpack(CERT_AND_SIG, cas_bytes))
-    # print(cas)
-    # cert = AttrDict(b3.schema_unpack(CERT_SCHEMA, cas.cert_bytes))  # note we use cert_bytes HERE
-    #
-    # # verify selfsign - certs pubkey and cas.sig_bytes
-    # print("Verifying using cert named: ", cert.name)
-    # verify_key = ecdsa.VerifyingKey.from_string(cert.pub_key, ecdsa.NIST256p)
-    # ret = verify_key.verify(cas.sig_bytes, cas.cert_bytes)          # and also HERE
-    # print("Verify ret: ",repr(ret))
 
 
 
@@ -174,7 +309,7 @@ def MakeSignerSelfSigned(args):
 
     # self-sign it, make sig
     sk = ecdsa.SigningKey.from_string(priv_bytes, ecdsa.NIST256p)
-    sig_d = AttrDict(sig_bytes=sk.sign(pub_cert_bytes), issuer_name=args.name)      # issuer == us bc self-sign
+    sig_d = AttrDict(sig_val=sk.sign(pub_cert_bytes), issuer_name=args.name)      # issuer == us bc self-sign
     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
     # wrap cert and sig together
@@ -182,7 +317,7 @@ def MakeSignerSelfSigned(args):
     das_bytes = b3.schema_pack(DATA_AND_SIG, das)
 
     # prepend header for das itself so straight concatenation makes a list-of-das
-    das_bytes_with_hdr = b3.encode_item_joined(None, b3.DICT, das_bytes)
+    das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
 
     # Save to combined file.
     WriteFiles(args.name, das_bytes_with_hdr, priv_bytes, combine=True)
@@ -207,7 +342,7 @@ def MakeSignerUsingSigner(args):
     pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, pub_cert)
 
     # sign it, make sig
-    sig_d = AttrDict(sig_bytes=SK.sign(pub_cert_bytes))
+    sig_d = AttrDict(sig_val=SK.sign(pub_cert_bytes))
     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
     # wrap cert & sig
@@ -215,7 +350,7 @@ def MakeSignerUsingSigner(args):
     das_bytes = b3.schema_pack(DATA_AND_SIG, das)
 
     # prepend header for das itself so straight concatenation makes a list-of-das
-    das_bytes_with_hdr = b3.encode_item_joined(None, b3.DICT, das_bytes)
+    das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
 
     # concat using's public with our cas
     output_public = das_bytes_with_hdr + using_public_part
@@ -238,7 +373,10 @@ def SignPayload(args):
     payload_bytes = open(args.name, "rb").read()
 
     # sign it, make sig
-    sig_d = AttrDict(sig_bytes=SK.sign(payload_bytes))
+    sig_actual_bytes = SK.sign(payload_bytes)
+    print("sig_actual_bytes ",repr(sig_actual_bytes))
+    print(len(sig_actual_bytes))
+    sig_d = AttrDict(sig_val=sig_actual_bytes)
     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
     # wrap payload & sig
@@ -246,7 +384,7 @@ def SignPayload(args):
     das_bytes = b3.schema_pack(DATA_AND_SIG, das)
 
     # prepend header for das itself so straight concatenation makes a list-of-das
-    das_bytes_with_hdr = b3.encode_item_joined(None, b3.DICT, das_bytes)
+    das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
 
     # concat using's public with our cas
     output_public = das_bytes_with_hdr + using_public_part
@@ -261,36 +399,12 @@ def SignPayload(args):
 
 
 
-# Expects a list of the same schema object. This should eventually be part of b3.
-# the schema objects need headers in an e.g. with_header way.
-# so, list item headers in the case of a list of DAS objects.
 
-def list_of_schema_unpack(schema, buf):
-    end = len(buf)
-    index = 0
-    out = []
-    while index < end:
-        print("decoding header, index=",index)
-        key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)
-        print("key %r  data_type %r  has %r  null %r  len %r  index %r" % (key,data_type,has_data,is_null,data_len,index))
 
-        assert key is None  # we dont care about key (we are a list not dicts so there shouldn't be any keys)
-        assert has_data is True
-        assert is_null is False
-        assert data_type == b3.DICT
-        assert data_len > 0
-        # decode_value will just get us the bytes
-        # Note: we could make a super simplified b3 decode_header that just extracts data_len here
-        #       (and asserts data_type is dict, has_data true, not_null true, etc)
-        #       favour rigour over performace ? these aren't hotpath apart from ACMD messages which get swamped by the ecdsa verify anyway.
-        #       but then we could also make this a b3 function itself anyway.
-        das_bytes = b3.item.decode_value(data_type, has_data, is_null, data_len, buf, index)
 
-        # Now unpack the actual dict too
-        dx = b3.schema_unpack(schema, das_bytes)
-        out.append(AttrDict(dx))
-        index += data_len
-    return out
+
+
+
 
 # Policy: names are short and become the filename. They can go in the cert too.
 #         Skip IDs for now.
@@ -355,6 +469,7 @@ def WriteFiles(name, public_part, private_part=b"", combine=True, desc=""):
 # look for name.PRIVATE and name.PUBLIC (.b64.txt)
 # split trumps combined.
 # Return "" for private_part if there is none, callers can validate
+
 
 
 def LoadFiles(name):
@@ -514,3 +629,49 @@ def ArgvArgs():
 
 if __name__ == "__main__":
     CommandlineMain()
+
+
+
+
+
+#
+#
+# # Ok we're writing the messiest version of this we possibly can
+# # =============================================================
+#
+# def decode_item_and_type(buf, index):
+#     key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)
+#     value = b3.item.decode_value(data_type, has_data, is_null, data_len, buf, index)
+#     return key, data_type, value, index+data_len
+#
+# # We're gonna do this level-by-level
+# # level0 is the top list header, and the list-doing
+# # level1 is the das list-item dict-headers, and the
+#
+#
+# def unpack_and_check_the_whole_public_part(buf):
+#     # Level 0:
+#     # First the public part has it's own little header, type=list, tag=payload-das-list or cert-das-list
+#     k0, typ0, val0, index0 = decode_item_and_type(buf, 0)
+#     if k0 not in (KEY_PAYLOAD_DAS_LIST, KEY_CERT_DAS_LIST):
+#         raise StructureError("Invalid first header - not payload_das_list or cert_das_list")
+#     if typ0 != b3.LIST:
+#         raise StructureError("Invalid first header - type is not LIST")
+#
+#     # val0 is the list bytes
+#     # Level 1: the das_list objects, which are bytes which we will schema_unpack
+#     end1 = len(val0)
+#     index1 = 0
+#     das_list = []
+#     while index1 < end1:
+#         k1, typ1, val1, index1 = decode_item_and_type(val0, index1)
+#         if k1 != KEY_DAS:
+#             raise StructureError("Invalid level1 list item - not a DAS")
+#         if typ1 != b3.DICT:
+#             raise StructureError("Invalud level1 list item - not dict type")
+#
+#         das_dict = b3.schema_unpack(DATA_AND_SIG, val1)
+#         # gives us {
+#
+#
+#
