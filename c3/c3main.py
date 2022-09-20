@@ -1,8 +1,10 @@
 
 from __future__ import print_function
 
-import sys, re, base64, os
+import sys, re, base64, os, traceback, random
 from pprint import pprint
+
+import six
 
 import b3
 b3.composite_schema.strict_mode = True   # fails if we get field names wrong when schema_packing
@@ -12,11 +14,12 @@ import ecdsa
 
 # tag/key values (mostly for sanity checking)
 # level0
-KEY_PAYLOAD_DAS_LIST = 55       # just not 0 or 1 etc.
-KEY_CERT_DAS_LIST = 66
+KEY_LIST_PAYLOAD = 55  # cert chain with a payload as the first entry
+KEY_LIST_SIGNER = 66   # cert chain with a cert as the first entry
 # level1
 KEY_DAS = 77
 
+KEY2NAME = {55:"KEY_LIST_PAYLOAD", 66:"KEY_LIST_SIGNER", 77:"KEY_DAS"}
 
 CERT_SCHEMA = (
     (b3.UTF8,  "name",  1, True),
@@ -108,6 +111,26 @@ class StructureError(C3Error):
 certs_by_name = {}
 
 
+def expect_key_header(want_keys, want_type, buf, index):
+    if not buf:
+        raise StructureError("No data - buffer is empty or None")
+    try:
+        key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)
+    except (IndexError, UnicodeDecodeError):
+        raise StructureError("Header structure is invalid")  # from None
+        # raise .. from None disables py3's chaining (cleaner unhandled prints) but isnt legal py2
+    if key not in want_keys:
+        raise StructureError("Incorrect key in header - wanted %r got %r" % (want_keys, key))
+    if data_type != want_type:
+        raise StructureError("Incorrect type in header - wanted %r got %r" % (want_type, data_type))
+    if not has_data:
+        raise StructureError("Invalid header - no has_data")
+    return key, index
+
+# Index and Unicode are the only two unhandled exception types that b3's decode_header code produces when fuzzed.
+# IndexError trying to decode a bad varint for ext_type, datalen or number key.
+# Unicode for when b3 thinks there's a utf8 key but the utf8 is bad.
+
 
 def schema_assert_mandatory_fields_truthy(schema, dx):
     print()
@@ -137,26 +160,30 @@ def schema_assert_mandatory_fields_truthy(schema, dx):
 # the schema objects need headers in an e.g. with_header way.
 # so, list item headers in the case of a list of DAS objects.
 
-def list_of_schema_unpack(schema, expect_item_keys, buf):
+def list_of_schema_unpack(schema, want_keys, buf):
     end = len(buf)
     index = 0
     out = []
+    print(index, end)
     while index < end:
         print("decoding header, index",index)
-        key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)
+        try:
+            key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)
+        except (IndexError, UnicodeDecodeError):
+            raise StructureError("List item header structure is invalid")
         print("   -> key %r  data_type %r  has %r  null %r  len %r  index %r" % (key,data_type,has_data,is_null,data_len,index))
-        assert key in expect_item_keys
-        assert has_data is True
-        assert is_null is False
-        assert data_type == b3.DICT
-        assert data_len > 0
-        # decode_value will just get us the bytes
-        # Note: we could make a super simplified b3 decode_header that just extracts data_len here
-        #       (and asserts data_type is dict, has_data true, not_null true, etc)
-        #       favour rigour over performace ? these aren't hotpath apart from ACMD messages which get swamped by the ecdsa verify anyway.
-        #       but then we could also make this a b3 function itself anyway.
+        if key not in want_keys:
+            raise StructureError("List item header key invalid - wanted %r got %r" % (want_keys, key))
+        if data_type != b3.DICT:
+            raise StructureError("List item header type invalid - wanted DICT got %r" % data_type)
+        if not has_data or data_len == 0:
+            raise StructureError("List item header invalid - no data")
+
+        print("list item data len ",data_len)
         das_bytes = b3.item.decode_value(data_type, has_data, is_null, data_len, buf, index)
-        assert len(das_bytes) > 0
+
+        if len(das_bytes) == 0:
+            raise StructureError("List item data is missing")
 
         # Now unpack the actual dict too
         dx = b3.schema_unpack(schema, das_bytes)
@@ -167,14 +194,6 @@ def list_of_schema_unpack(schema, expect_item_keys, buf):
 
 
 
-
-
-
-# Verify should output the payload if it's a "payload public part"
-# Which is driven by that little initial header.
-
-
-
 def Verify(args):
     global certs_by_name
 
@@ -182,38 +201,57 @@ def Verify(args):
 
     public_part, private_part = LoadFiles(args.name)
 
+    # public_part = b"\xdd\x37\x03\xed\x4d\x01\x44"
+    # dd list-hdr x37=55=KEY_LIST_PAYLOAD 03=len  ed dict-hdr x4d=77=KEY_DAS 0x=len
+    # And we're into unpack DATA_AND_SIG and fail mando checks at that point, so we can stop checking everything so much.
+
+
+    # The public part should have an initial header that indicates whether the first das is a payload or a cert
+    ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, public_part, 0)
+    print("Initial header got key: ", ppkey,"  ",KEY2NAME[ppkey])
+    public_part = public_part[index:]               # chop off the header
+
     # Should be a list of DAS structures, so pythonize the list
+    if not public_part:
+        raise StructureError("Missing cert chain / payload")
+
     das_list = list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)
+    print("Got das list")
+    pprint(das_list)
     #   - validated key=key_das
     #   - type=dict is implicit to the function
 
-
-
     # unpack the certs & sigs in das_list
 
-    for i,das in enumerate(das_list):
-        das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_bytes))       # creates a 'none none' cert entry for the payload das.
-        das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_bytes))
-        # update name:cert map/index.  (This will later have the root cert in it, and can be a cache.)
+    for i, das in enumerate(das_list):
+        # dont unpack cert if this is the first das and ppkey is PAYLOAD
+        # so DO unpack cert if this is not the first das, or if ppkey is signer
+        if i > 0 or ppkey == KEY_LIST_SIGNER:
+            das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_bytes))       # creates a 'none none' cert entry for the payload das.
 
-        if i > 0:
-            schema_assert_mandatory_fields_truthy(CERT_SCHEMA, das.cert)
+        # always unpack sig
+        das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_bytes))
         schema_assert_mandatory_fields_truthy(SIG_SCHEMA, das.sig)
 
-        print("len of sig_actual_bytes", len(das.sig.sig_val))
+        if "cert" in das:
+            schema_assert_mandatory_fields_truthy(CERT_SCHEMA, das.cert)
+            # update name:cert map/index.  (This will later have the root cert in it, and can be a cache.)
+            certs_by_name[das.cert.name] = das.cert
 
-        certs_by_name[das.cert.name] = das.cert
-        print()
-        pprint(das)
 
     print()
+    print("========")
+    print()
+    pprint(das_list)
+    print()
+    print("========")
     print()
 
 
 
     # ok we got payload bytes (das.data_bytes) and sig bytes (das.sig.sig_bytes)
 
-    for i,das in enumerate(das_list):
+    for i, das in enumerate(das_list):
         print()
         print("next cert")
 
@@ -239,7 +277,12 @@ def Verify(args):
 
         # Do verify
         ret = VK.verify(das.sig.sig_val, das.data_bytes)
-        print("Verifying name ", das.cert.name, " returns ",ret)  # says "None" for first because its not a cert.
+        if i == 0 and ppkey == KEY_LIST_PAYLOAD:
+            vname = "payload"
+        else:
+            vname = "cert "+das.cert.name
+
+        print("Verifying ", vname, " returns ",ret)
 
     print()
     print("YAY we got to the end")
@@ -277,6 +320,10 @@ def CommandlineMain():
     if cmd == "verify":
         Verify(args)
         return
+
+    # if cmd == "fuzz":
+    #     FuzzEKH2()
+    #     return
 
     if cmd == "loadfiles":
         pub,priv = LoadFiles(args.using)
@@ -319,8 +366,11 @@ def MakeSignerSelfSigned(args):
     # prepend header for das itself so straight concatenation makes a list-of-das
     das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
 
+    # prepend the overall public_part header
+    public_part = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, das_bytes_with_hdr)
+
     # Save to combined file.
-    WriteFiles(args.name, das_bytes_with_hdr, priv_bytes, combine=True)
+    WriteFiles(args.name, public_part, priv_bytes, combine=True)
 
     return
 
@@ -352,11 +402,22 @@ def MakeSignerUsingSigner(args):
     # prepend header for das itself so straight concatenation makes a list-of-das
     das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
 
-    # concat using's public with our cas
-    output_public = das_bytes_with_hdr + using_public_part
+    # we need to
+    # 1) strip using_public_part's public_part header,
+    # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
+
+    _, index = expect_key_header([KEY_LIST_SIGNER], b3.LIST, using_public_part, 0)
+    using_public_part = using_public_part[index:]
+
+    # 2) concat our data + using_public_part's data
+    out_public_part = das_bytes_with_hdr + using_public_part
+
+    # 3) prepend a new overall public_part header
+    out_public_part = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, out_public_part)
+
 
     # Save to combined file.
-    WriteFiles(args.name, output_public, priv_bytes, combine=True)
+    WriteFiles(args.name, out_public_part, priv_bytes, combine=True)
 
 
 
@@ -376,6 +437,8 @@ def SignPayload(args):
     sig_actual_bytes = SK.sign(payload_bytes)
     print("sig_actual_bytes ",repr(sig_actual_bytes))
     print(len(sig_actual_bytes))
+
+
     sig_d = AttrDict(sig_val=sig_actual_bytes)
     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
@@ -386,11 +449,24 @@ def SignPayload(args):
     # prepend header for das itself so straight concatenation makes a list-of-das
     das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
 
-    # concat using's public with our cas
-    output_public = das_bytes_with_hdr + using_public_part
+    # # concat using's public with our cas
+    # output_public = das_bytes_with_hdr + using_public_part
+
+    # we need to
+    # 1) strip using_public_part's public_part header,
+    # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
+
+    _, index = expect_key_header([KEY_LIST_SIGNER], b3.LIST, using_public_part, 0)
+    using_public_part = using_public_part[index:]
+
+    # 2) concat our data + using_public_part's data
+    out_public_part = das_bytes_with_hdr + using_public_part
+
+    # 3) prepend a new overall public_part header
+    out_public_part = b3.encode_item_joined(KEY_LIST_PAYLOAD, b3.LIST, out_public_part)
 
     # Save to combined file.
-    WriteFiles(args.name, output_public, b"", combine=False)    # wont write private_part if its empty
+    WriteFiles(args.name, out_public_part, b"", combine=False)    # wont write private_part if its empty
 
 
 # step 1: just verify the in-place stuff. So we're temporarily ignoring the fact that there's no seperate root pub key,
@@ -539,6 +615,11 @@ def LoadFiles(name):
 
 
 
+
+
+
+
+
     # ---- D I M E N S I O N S ----
 
     # keytypes & libsodium & libsodium loading
@@ -634,6 +715,7 @@ if __name__ == "__main__":
 
 
 
+
 #
 #
 # # Ok we're writing the messiest version of this we possibly can
@@ -675,3 +757,43 @@ if __name__ == "__main__":
 #
 #
 #
+
+
+
+
+
+
+# ---- Basic fuzzing of the initial header check ----
+#
+# def FuzzEKH():
+#     for i in range(0,255):
+#         buf = six.int2byte(i) #+ b"\x0f\x55\x55"
+#         try:
+#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, buf, 0)
+#             print("%4i %02x - SUCCESS - key = %r" % (i,i, ppkey))
+#         except Exception as e:
+#             print("%4i %02x -  %s" % (i,i, e))
+#             #print(traceback.format_exc())
+#
+# def FuzzEKH2():
+#     i = 0
+#     z = {}
+#     while True:
+#         i += 1
+#         buf = random.randbytes(20)
+#         try:
+#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, buf, 0)
+#             out = "SUCCESS - key = %r" % ppkey
+#         except Exception as e:
+#             out = "%r" % e
+#
+#         #print(out)
+#         z[out] = z.get(out,0) + 1
+#
+#         if i % 100000 == 0:
+#             print()
+#             print(len(z))
+#             pprint(z)
+#
+#
+
