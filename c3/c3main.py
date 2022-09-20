@@ -48,7 +48,9 @@ class AttrDict(dict):
 # Errors
 class C3Error(ValueError):
     pass
-class SignatureFail(C3Error):
+class VerifyError(C3Error):     # cant find cert, etc
+    pass
+class SignatureFail(C3Error):       # found but signature mismatches
     pass
 class StructureError(C3Error):
     pass
@@ -70,40 +72,33 @@ class StructureError(C3Error):
 
 # just use the name as the ID for now.
 
-#
-# # unanswered questions: how best to store a cert in code?
-# # unanswered questions: do we verify the selfsigned root using itself? or just trust it because it is here.
-# ROOT1_CODE = """
-# 6JwBCQFLGQEFcm9vdDEJAkC9I6MGAUU1BiYhFcTUPF75NSgvyL4TAOMynR8eIChCMzVGVamff/+X
-# Kptia/EVarhvFSDFCMAcBlch4NCJ4PSXCQJLCQFAnOusYBYEbjhXo5Quujy2fEz1lvtyPbMUd6+k
-# pgl5/IAhhoSnwU9zfv86aA8WVBQ37z7XYg5xHBcylN8Zmb3JOhkCBXJvb3Qx
-# """
-# # ^^ actually this should be a das
-# root1_das_bytes = base64.b64decode(ROOT1_CODE)
-# root1_das = AttrDict(b3.schema_unpack(DATA_AND_SIG, root1_das_bytes))
-# print(root1_das)
-# # We need an unpack_and_structure_validate function, like the old version's Expect()
-# # Maybe it can be called Expect.
-# # Expect can Expect the tag values to be certain values.
-# # we can have a tag value for a "payload das" and a tag value for a "cert das"
-# # It will return an AttrDict.
-#
-#
-# # We need a Really Good Diagram of how the data structure works currently so we can see if we can make Expect recursive etc.
-#
-# # The lists need a Header
-# # The header gets prepended on write because build is straight concatenating
-# # The header can get 'shucked' by list_of_schema_unpack as we load lists.
-#
-#
-# root1_cert = AttrDict(b3.schema_unpack(CERT_SCHEMA, root1_das.data_bytes))
-# print(root1_cert)
-#
-#
-# # pretty much decide if this errors using exceptions, or returncodes.
-# # Leaning towards exceptions, but make them as user friendly as possible.
-#
-# # StructureError etc are good.
+def load_root1_code():
+    global certs_by_name
+
+    root1_b64 = """
+    2UKgAelNnAEJAUsZAQVyb290MQkCQBVbIY/rRuCXQmIsJnU/Fs7zv+K9FgwlAOpfehNk/HLYaKma
+    1iWPiwE0rQxZZiipW6FL/nZ+3SWM5qmcrRZY1IYJAksJAUCvNAHxU51pY1Dd8RwA4pXN6DPRCpFD
+    IJkT7s/BuHVcY67NRLyUemmCxm8GvnFQGOrahsg7CgJobl7AB8HGo8AhGQIFcm9vdDE=
+    """
+    root1_block = base64.b64decode(root1_b64)
+    print("=======[ Verifying baked in root1 ]==========")
+    VerifyBlock(root1_block)                                # note we're ignoring the returncode for now
+    print("=======[ Done Verifying baked in root1 ]==========")
+    print()
+    pprint(certs_by_name)
+
+    print("="*120)
+    print("=" * 120)
+
+    # Todo:  we need to split up verify into "make cert dict from base64" loader-stuff,
+    #        and the verifyer parts.
+
+    # TODO because we can't load-and0-verify this code cert here because there's a chicken and egg problem with the global cache.
+    # TODO but verifying a self-signed cert with itself would be a nice to have.
+    # TODO perhaps that can be a seperate function, like it is with creation at the moment.
+
+
+
 #
 # certs_by_name = {root1_cert.name : root1_cert}
 #
@@ -133,26 +128,26 @@ def expect_key_header(want_keys, want_type, buf, index):
 
 
 def schema_assert_mandatory_fields_truthy(schema, dx):
-    print()
-    print("=== schema assert truthy ===")
-    print("Schema:")
-    pprint(schema)
-    print("DX:")
-    pprint(dx)
+    # print()
+    # print("=== schema assert truthy ===")
+    # print("Schema:")
+    # pprint(schema)
+    # print("DX:")
+    # pprint(dx)
     for field_def in schema:                    # by name
         # only check if mandatory bool flag is both present AND true.
-        print("Mando: ",field_def)
+        # print("Mando: ",field_def)
         if len(field_def) > 3 and field_def[3] is True:
-            print("    - doing truthy check")
+            # print("    - doing truthy check")
             field_name = field_def[1]
             if field_name not in dx:
                 raise StructureError("Required schema field '%s' is missing" % field_name)
             if not dx[field_name]:
                 raise StructureError("Mandatory field '%s' is %r" % (field_name, dx[field_name]))
-        else:
-            print("    - NOT doing truthy check")
-    print()
-    print()
+        #else:
+        #    print("    - NOT doing truthy check")
+    #print()
+    #print()
 
 
 
@@ -193,13 +188,18 @@ def list_of_schema_unpack(schema, want_keys, buf):
     return out
 
 
-
 def Verify(args):
     global certs_by_name
-
     # temporarily not using --using, everything coming from the signed-payload-file
+    public_part, _ = LoadFiles(args.name)
+    VerifyBlock(public_part)
 
-    public_part, private_part = LoadFiles(args.name)
+
+def VerifyBlock(public_part):
+    global certs_by_name
+    print("certs by name",certs_by_name)
+    prevalid_certs_by_name = {}  # so self-signeds can be validated
+    found_in_global = False
 
     # public_part = b"\xdd\x37\x03\xed\x4d\x01\x44"
     # dd list-hdr x37=55=KEY_LIST_PAYLOAD 03=len  ed dict-hdr x4d=77=KEY_DAS 0x=len
@@ -236,7 +236,7 @@ def Verify(args):
         if "cert" in das:
             schema_assert_mandatory_fields_truthy(CERT_SCHEMA, das.cert)
             # update name:cert map/index.  (This will later have the root cert in it, and can be a cache.)
-            certs_by_name[das.cert.name] = das.cert
+            prevalid_certs_by_name[das.cert.name] = das.cert
 
 
     print()
@@ -246,14 +246,16 @@ def Verify(args):
     print()
     print("========")
     print()
-
-
+    pprint(certs_by_name)
+    print()
+    print("++++++++")
 
     # ok we got payload bytes (das.data_bytes) and sig bytes (das.sig.sig_bytes)
 
     for i, das in enumerate(das_list):
         print()
         print("next cert")
+        found_in_global = False
 
         # seek the signing cert for the sig
         issuer_name = das.sig.issuer_name
@@ -262,13 +264,28 @@ def Verify(args):
         # if it's empty, that means "next cert in the chain"
         if not issuer_name:
             print("no issuer name, assuming next cert in chain is the signer")
+
+            if i+1 >= len(das_list):
+                raise VerifyError("End of cert chain but no issuer name for last cert")     # FAIL: fell off
+
             next_das = das_list[i + 1]
             issuer_cert_pub_key_bytes = next_das.cert.pub_key
         # if it's not, try to get the cert from our cache
         # This will work for self-signed roots because their sig's issuer_name == their name
         else:
             print("got issuer name, looking up in certs_by_name")
-            issuer_cert = certs_by_name[issuer_name]
+            # Try it in both, if its in prevalid then ok
+            # if its in global, then even better, and set found_in_trust_root true
+            if issuer_name in certs_by_name:
+                print("found in GLOBAL certs_by_name")
+                issuer_cert = certs_by_name[issuer_name]
+                found_in_global = True
+            elif issuer_name in prevalid_certs_by_name:
+                print("found in prevalid certs_by_name")
+                issuer_cert = prevalid_certs_by_name[issuer_name]
+            else:
+                raise VerifyError("Issuer cert %r not found in trust store" % issuer_name)        # FAIL: requested name not found
+
             print("got cert")
             issuer_cert_pub_key_bytes = issuer_cert.pub_key
 
@@ -283,6 +300,27 @@ def Verify(args):
             vname = "cert "+das.cert.name
 
         print("Verifying ", vname, " returns ",ret)
+
+        # ok if we got here the cert or payload is valid
+        if ret == True:
+            # if we found our issuer in the global store, we are successful
+            if found_in_global == True:
+                print("Validated by global cert! we have won.")
+
+                # TODO: only NOW do we want to load all the certs in the chain
+                # TODO: this needs to be reworked to only save into global, certs that have been fully validated.
+                #       so make a proper cert cache
+                if i > 0 or ppkey == KEY_LIST_SIGNER:  # put the cert in global certs_by_name
+                    print("cert ", vname, " is valid, putting in global certs_by_name")
+                    certs_by_name[das.cert.name] = das.cert
+
+                return True
+
+    # otherwise we got to the end and the cert was not found in global
+    print("got to the end and cert wasnt found in global")
+    return False        # for now so we can use this as code_root1's loader
+
+    raise VerifyError("End of cert chain but no issuer found in global trust store")
 
 
     # There are 3 ways for this to fail:
@@ -330,8 +368,6 @@ def Verify(args):
     # 10) ascii fields
     # 11) release!
 
-    print()
-    print("YAY we got to the end")
     # if root1 is self-signed we get here now and everything is happy
     # BECAUSE, the loop doesn't try and access the next cert at the end and blow up like it did before
     # and the loop gets to complete!
@@ -355,13 +391,21 @@ def CommandlineMain():
         MakeSignerSelfSigned(args)
         return
 
-    if cmd == "makesignerusingsigner":
-        MakeSignerUsingSigner(args)
+    if cmd == "makesignerusingsignerappended":
+        MakeSignerUsingSignerAppended(args)
         return
+
+    if cmd == "makesignerusingsignerbyname":
+        MakeSignerUsingSignerByName(args)
+        return
+
 
     if cmd == "signpayload":
         SignPayload(args)
         return
+
+
+    load_root1_code()
 
     if cmd == "verify":
         Verify(args)
@@ -421,7 +465,7 @@ def MakeSignerSelfSigned(args):
     return
 
 
-def MakeSignerUsingSigner(args):
+def MakeSignerUsingSignerAppended(args):
     for req_arg in ("name", "using"):
         if req_arg not in args:
             UsageBail("please supply --%s=" % (req_arg,))
@@ -464,6 +508,58 @@ def MakeSignerUsingSigner(args):
 
     # Save to combined file.
     WriteFiles(args.name, out_public_part, priv_bytes, combine=True)
+
+
+def MakeSignerUsingSignerByName(args):
+    for req_arg in ("name", "using"):
+        if req_arg not in args:
+            UsageBail("please supply --%s=" % (req_arg,))
+
+    # ---- Load signer & ready the ecdsa object ----
+    _, using_private_part = LoadFiles(args.using)
+    SK = ecdsa.SigningKey.from_string(using_private_part, ecdsa.NIST256p)
+
+    # make keys
+    priv_bytes, pub_bytes = GenKeysECDSANist256p()
+
+    # make pub cert
+    pub_cert = AttrDict(name=args.name, pub_key=pub_bytes)
+    pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, pub_cert)
+
+    # sign it, make sig
+    sig_d = AttrDict(sig_val=SK.sign(pub_cert_bytes), issuer_name=args.using)
+    sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
+
+    # wrap cert & sig
+    das = AttrDict(data_bytes=pub_cert_bytes, sig_bytes=sig_bytes)
+    das_bytes = b3.schema_pack(DATA_AND_SIG, das)
+
+    # prepend header for das itself so straight concatenation makes a list-of-das
+    das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
+
+    # # we need to
+    # # 1) strip using_public_part's public_part header,
+    # # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
+    #
+    # _, index = expect_key_header([KEY_LIST_SIGNER], b3.LIST, using_public_part, 0)
+    # using_public_part = using_public_part[index:]
+    #
+    # # 2) concat our data + using_public_part's data
+    # out_public_part = das_bytes_with_hdr + using_public_part
+
+    # 3) prepend a new overall public_part header
+    out_public_part = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, das_bytes_with_hdr)
+
+
+    # Save to combined file.
+    WriteFiles(args.name, out_public_part, priv_bytes, combine=True)
+
+
+
+
+
+
+
 
 
 
