@@ -1,5 +1,6 @@
 
-import pytest, base64
+import pytest, base64, traceback, random
+from pprint import pprint
 
 import c3main
 
@@ -12,8 +13,6 @@ import c3main
 # We're not testing ALL the StructureErrors right now, fuzz testing got a lot of them
 # put the fuzzing stuff here
 
-def test_hello():
-    assert True
 
 @pytest.fixture
 def c3m():
@@ -31,19 +30,26 @@ root1_block = base64.b64decode(root1)
 
 plaintext_payload = b"Hello this is the actual payload\n"
 
-payload_and_chain_with_wanted_name = """
+payload_and_chain_wanted_name_root1 = """
 2TeQAulNbAkBIUhlbGxvIHRoaXMgaXMgdGhlIGFjdHVhbCBwYXlsb2FkCgkCRQkBQMRZbYZVUowg
 EJXqQpu2TiMFdHjkhKtiYSzLzQrcBkMR5LkPdvNfkxOVIp96EensA6FpkXIk+Lr2LCRE/SDF6/sV
 AulNnQEJAUwZAQZpbnRlcjMJAkAbE6h1BD8t7d+K2f4tnag0Q6NNlx8MLWWMZKE4aKe3WY9Ilu5W
 L+EWWq13xGDUyOp3OK4QhbkS0+1Iw2TswTchCQJLCQFAGJE1krY0/RjkNtp0ETrMr2Kko8Dz+/1s
 0axfU2jfwBGf5HkSagtkfWNTDkdBDTShKvQq2qwHeBdhsLHs8jDTthkCBXJvb3Qx"""
+public_part = base64.b64decode(payload_and_chain_wanted_name_root1)
 
 # Happy path
 def test_verify_success_ext_root1(c3m):
-    public_part = base64.b64decode(payload_and_chain_with_wanted_name)
     c3m.add_trusted_certs(root1_block)
     ret = c3m.verify(c3m.load(public_part))
     assert ret == plaintext_payload
+
+
+# Glitch the payload contents so the signature fails to verify
+def test_verify_signature_fail(c3m):
+    public_part_glitched = public_part[:100] + b"X" + public_part[101:]
+    with pytest.raises(c3main.InvalidSignatureError):
+        c3m.verify(c3m.load(public_part_glitched))
 
 
 # Apart from actual signature fails, there are 3 ways for this to fail:
@@ -51,23 +57,20 @@ def test_verify_success_ext_root1(c3m):
 # 2) Cant Find Named Cert - in the cert store / trust store / certs_by_name etc
 # 3) Last cert is self-signed and verified OK but isn't in the trust store.
 
-
-# Without loading root1 to trusted store first
-def test_verify_cert_not_found_error(c3m):
-    public_part = base64.b64decode(payload_and_chain_with_wanted_name)
-    with pytest.raises(c3main.CertNotFoundError):
-        c3m.verify(c3m.load(public_part))
-
-
 # cut inter2 off the end of payload_and_chain_with_wanted_name
 # to trigger "next cert is the signer but there is no next cert" failure mode
 # Don't need root1 loaded because it doesn't get that far
-
 def test_verify_short_chain(c3m):
-    public_part = base64.b64decode(payload_and_chain_with_wanted_name)
     public_part_without_inter2 = public_part[:115]
     with pytest.raises(c3main.ShortChainError):
         c3m.verify(c3m.load(public_part_without_inter2))
+
+
+# Without loading root1 to trusted store first
+def test_verify_cert_not_found_error(c3m):
+    with pytest.raises(c3main.CertNotFoundError):
+        c3m.verify(c3m.load(public_part))
+
 
 
 payload_and_chain_with_root_selfsigned_included = """
@@ -81,13 +84,30 @@ CQJAdOodJNyKdMdsa+ujdomof7CfdNuYd9DjnxnLQObPQdrTx1qS7bopuhNrGkHqrIaSnx+SllM0
 WSHT72yY49AFS5dQ13v4538RaTD6c5wZAgVyb290Mg=="""
 
 # a fully valid chain with a selfsign at the end, should still fail with UntrustedChainError
-
 def test_verify_untrusted_chain(c3m):
-    public_part = base64.b64decode(payload_and_chain_with_root_selfsigned_included)
+    public_part_selfsign_incl = base64.b64decode(payload_and_chain_with_root_selfsigned_included)
     with pytest.raises(c3main.UntrustedChainError):
-        c3m.verify(c3m.load(public_part))
+        c3m.verify(c3m.load(public_part_selfsign_incl))
 
 
+# ---- Test load error handling ----
+
+def test_load_empty(c3m):
+    with pytest.raises(c3main.StructureError):
+        c3m.load(b"")
+
+def test_load_none(c3m):
+    with pytest.raises(c3main.StructureError):
+        c3m.load(None)
+
+def test_load_nulls(c3m):
+    with pytest.raises(c3main.StructureError):
+        c3m.load(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+
+
+
+
+# ---- Truncate and glitch loops -----
 
 # Testing what happens if the public_part buffer is incomplete
 # (And finding out exactly where to truncate public_part for the short-chain test above)
@@ -95,7 +115,7 @@ def test_verify_untrusted_chain(c3m):
 def truncmain():
     c3m = c3main.C3()
     c3m.add_trusted_certs(root1_block)
-    buf = base64.b64decode(payload_and_chain_with_wanted_name)
+    buf = public_part[:]
 
     for i in range(len(buf)+1, 1, -1):
         buf2 = buf[:i]
@@ -112,10 +132,55 @@ def truncmain():
         print("%4i   - SUCCESS -" % (i,))
 
 
+# glitch a byte anywhere? in the chain to trigger signature fails.
+
+def glitchmain():
+    c3m = c3main.C3()
+    c3m.add_trusted_certs(root1_block)
+    buf = public_part[:]
+
+    for i in range(len(buf)):
+        buf2 = buf[:i] + b"\x00" + buf[i+1:]
+        try:
+            xx = c3m.load(buf2)
+        except Exception as e:
+            print("%4i    load   %20s" % (i,e))
+            if "index out of" in str(e):
+                print()
+                print(traceback.format_exc())
+                print()
+            continue
+        try:
+            c3m.verify(xx)
+        except Exception as e:
+            print("%4i  verify   %r" % (i,e))
+            continue
+        print("%4i   - SUCCESS -" % (i,))
+
+def smallrandfuzz():
+    c3m = c3main.C3()
+    z = {}
+    i = 0
+    while True:
+        i += 1
+        #buf = random.randbytes(40)
+        buf = b"\xdd\x37\x30\xed\x4d\x20\x44" + random.randbytes(40)
+        try:
+            xx = c3m.load(buf)
+            out = "omg SUCCESS omg"
+        except Exception as e:
+            out = str(e)
+        z[out] = z.get(out,0) + 1
+
+        if i % 100000 == 0:
+            print()
+            pprint(z)
 
 
 
 
 
 if __name__ == '__main__':
-    truncmain()
+    #truncmain()
+    #glitchmain()
+    smallrandfuzz()
