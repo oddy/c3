@@ -10,6 +10,9 @@ import b3
 b3.composite_schema.strict_mode = True   # to make b3 error when we field names wrong when schema_packing
 import ecdsa
 
+
+# Todo: Consider fuzz-friendly-ing the structure error messages.
+
 # So far we dont have any optional fields.
 
 # tag/key values (mostly for sanity checking)
@@ -341,6 +344,103 @@ class C3(object):
 
     # ============================== Signing =======================================================
 
+    def MakeSigner(self):
+        return
+
+
+    #               |     no payload             payload
+    #  -------------+-------------------------------------------------
+    #  using cert   |     make chain signer      sign payload
+    #               |
+    #  using self   |     make self signer       ERROR invalid state
+
+
+
+    def MakeSign(self, payload_file_name, using_file_part_name, new_key_name):
+
+        # payload = afilename
+        # payload = nothing -> generate a key
+        # using == self  -> selfsign
+        # using = afilename
+
+        # [key gen]  if applicable   - if not payload
+
+        # [make a selfsign] if applicable  - if using = self (and not payload). cant sign a payload with self, error.
+
+        # [sign the thing using using] if not selfsign
+
+        # [append pub] if applicable   - if not selfsign (and maybe later, options + DoNotDistribute)
+
+        # [prepend header] for payload-or-not
+
+        # <also deliver priv> if applicable
+        out = []
+        append = False      # whether to append Using's public part or link by issuer_name instead.
+
+        if payload_file_name and using_file_part_name == "self":
+            raise TypeError("using=self is only for creating selfsigning certs, not signing payloads")
+
+
+        # --- Key gen if applicable ---
+        if not payload_file_name:
+            # make keys
+            new_key_priv, new_key_pub = self.GenKeysECDSANist256p()
+
+            # make pub cert for pub key
+            new_pub_cert = AttrDict(name=new_key_name, pub_key=new_key_pub)
+            new_pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, new_pub_cert)
+            payload_bytes = new_pub_cert_bytes
+        # --- Load payload if not key-genning ---
+        else:
+            payload_bytes = open(payload_file_name,"rb").read()
+
+
+        # --- Make a selfsign if applicable ---
+        if using_file_part_name == "self":      # we have new_key_priv because not payload_file_name is guaranteed
+            # self-sign it, make sig
+            SK = ecdsa.SigningKey.from_string(new_key_priv, ecdsa.NIST256p)
+            sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name=new_key_name)  # note byname, not append
+            append = False                                                              # note byname, not append
+            sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
+
+        # --- Sign the thing (cert or payload) using Using, if not selfsign ----
+        else:
+            using_public_part, using_private_part = self.load_files(using_file_part_name)
+            SK = ecdsa.SigningKey.from_string(using_private_part, ecdsa.NIST256p)
+            sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name="")    # note append, not byname
+            # sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name=using_file_part_name)  # if we were using byname instead of append.
+            append = True                                                       # note append, not byname
+            sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
+
+        # --- Make data-and-sig structure ---
+        das = AttrDict(data_bytes=payload_bytes, sig_bytes=sig_bytes)
+        das_bytes = b3.schema_pack(DATA_AND_SIG, das)
+        # --- prepend header for das itself so straight concatenation makes a list-of-das ---
+        das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
+
+
+        # --- Append Using's public_part (the chain) if applicable ---
+        if append:
+            # we need to:
+            # 1) strip using_public_part's public_part header,
+            # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
+            _, index = self.expect_key_header([KEY_LIST_SIGNER], b3.LIST, using_public_part, 0)
+            using_public_part = using_public_part[index:]
+            # 2) concat our data + using_public_part's data
+            out_public_part = das_bytes_with_hdr + using_public_part
+        else:
+            out_public_part = das_bytes_with_hdr
+
+        # --- Prepend a new overall public_part header & save out files ---
+        if payload_file_name:
+            # signed-payload output
+            out_public_with_hdr = b3.encode_item_joined(KEY_LIST_PAYLOAD, b3.LIST, out_public_part)
+            self.write_files(payload_file_name, out_public_with_hdr, b"", combine=False)  # wont write private_part if its empty
+        else:
+            # signer (self or chain) output
+            out_public_with_hdr = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, out_public_part)
+            self.write_files(payload_file_name, out_public_with_hdr, new_key_priv, combine=True)
+
 
 
 
@@ -514,6 +614,16 @@ class C3(object):
         self.write_files(args.name, out_public_part, b"", combine=False)  # wont write private_part if its empty
 
 
+    # using=using name, mode=append or link.
+    # payload or no payload.
+
+
+
+
+
+
+
+
 
 
     # TODO TOMORROW:
@@ -581,6 +691,12 @@ def CommandlineMain():
     c3m.add_trusted_certs(root1_block)
     print("=======[ Done Verifying baked in root1 ]==========")
 
+    # todo: This should become --append or --link when we click-ify the commandline.
+    if "sign" in cmd and ("mode" not in args or args.mode not in ("append", "link") and args.using != "self"):
+        print("please specify --mode=append or --mode=link")
+        print("       append - add using's public part to the payload cert chain")
+        print("       link   - add the NAME of using's public part to the payload cert chain")
+        UsageBail()
 
     if cmd == "makesignerselfsigned":
         c3m.MakeSignerSelfSigned(args)

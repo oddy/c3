@@ -163,8 +163,8 @@ def smallrandfuzz():
     i = 0
     while True:
         i += 1
-        #buf = random.randbytes(40)
-        buf = b"\xdd\x37\x30\xed\x4d\x20\x44" + random.randbytes(40)
+        buf = random.randbytes(40)
+        #buf = b"\xdd\x37\x40\xed\x4d\x30\x44" + random.randbytes(60)
         try:
             xx = c3m.load(buf)
             out = "omg SUCCESS omg"
@@ -175,6 +175,7 @@ def smallrandfuzz():
         if i % 100000 == 0:
             print()
             pprint(z)
+            return
 
 
 
