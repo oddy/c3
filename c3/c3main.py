@@ -45,8 +45,6 @@ class AttrDict(dict):
     def __getattr__(self, name):
         return self[name]
 
-# What we have to do to test it.
-# Make selfsigned root1, make inter1, make
 
 # Errors
 class C3Error(ValueError):
@@ -61,22 +59,18 @@ class CertNotFoundError(VerifyError):   # chain points to a cert name we dont ha
     pass
 class ShortChainError(VerifyError):  # the next cert for verifying is missing off the end
     pass
-class UntrustedChainError(VerifyError): # the chain ends with a self-sign we dont have in Trusted
+class UntrustedChainError(VerifyError):  # the chain ends with a self-sign we dont have in Trusted
     pass
-
 
 
 
 # Policy: verify() only reads from self.trusted_certs, it doesnt write anything into there.
 #         That's the caller's (user's) remit.
 
-
 class C3(object):
     def __init__(self):
         self.trusted_certs = {}   # by name. For e.g. root certs etc.
         return
-
-    # ===================================== API ====================================================
 
     def add_trusted_certs(self, certs_bytes, force=False):
         cert_das_list = self.load(certs_bytes)
@@ -91,6 +85,9 @@ class C3(object):
             self.trusted_certs[das.cert.name] = das.cert
         return
 
+    # ============ Load and Verify =================================================================
+
+    # load() = public_part bytes -> list of Data-And-Sigs items.
 
     def load(self, public_part):
         # The public part should have an initial header that indicates whether the first das is a payload or a cert
@@ -115,6 +112,8 @@ class C3(object):
         return das_list
 
     def ctnm(self, das):
+        if not das:
+            return ""
         if "cert" in das:
             return " (cert %r) " % das.cert.name
         else:
@@ -124,6 +123,8 @@ class C3(object):
     # 1) "fell off" - unnamed issuer cert and no next cert in line
     # 2) Cant Find Named Cert - in the cert store / trust store / certs_by_name etc
     # 3) Last cert is self-signed and verified OK but isn't in the trust store.
+
+    # verify() = Data-And-Sigs items list -> payload bytes or an Exception
 
     def verify(self, das_list):
         certs_by_name = {das.cert.name : das.cert for das in das_list if "cert" in das}
@@ -165,7 +166,7 @@ class C3(object):
                 # print(" - Returning payload")
                 return first_das.data_bytes
             return True
-        raise UntrustedChainError(self.ctnm(das)+"Chain does not link to trusted certs")
+        raise UntrustedChainError("Chain does not link to trusted certs")
 
 
 
@@ -344,14 +345,27 @@ class C3(object):
 
     # ============================== Signing =======================================================
 
+    # This does not count using write_files or read_files
+
+    # load_files()  single or combined files ->  public_part bytes and private_part bytes maybe
+    # load() = public_part bytes -> list of Data-And-Sigs items.
+    # verify() = Data-And-Sigs items list -> payload bytes or an Exception
+
+
+    # write_files()  public_part bytes and private_part bytes maybe -> single or combined files
+
+    # save()  list of data-and-sigs items   ?   ->   public_part bytes
+
+    # The way sign combines things, we get bytes out.
+    # Cannot be seperated like load and verify are, nor do we want to.
+
+
+
     def GenKeysECDSANist256p(self):
         curve = [i for i in ecdsa.curves.curves if i.name == 'NIST256p'][0]
         priv = ecdsa.SigningKey.generate(curve=curve)
         pub = priv.get_verifying_key()
         return priv.to_string(), pub.to_string()
-
-
-
 
     #               |     no payload             payload
     #  -------------+-------------------------------------------------
@@ -359,9 +373,17 @@ class C3(object):
     #               |
     #  using self   |     make self signer       ERROR invalid state
 
-    # def MakeSign(self, payload_file_name, using_file_part_name, new_key_name):
+    # Make/Sign actions:
+    MAKE_SELFSIGNED = 1
+    MAKE_INTERMEDIATE = 2
+    SIGN_PAYLOAD = 3
 
-    def MakeSign(self, payload_or_cert, name, using_file_part_name):
+    # name = name to give selfsigned cert, name to give inter cert.  (payload doesnt get a name)
+    # payload_bytes  = the payload, if signing a payload
+    # using_pub_bytes, using_priv_bytes = the parts of the Using keypair, if not making selfsigned
+
+
+    def MakeSign(self, action, name="", payload="", using_pub=b"", using_priv=b""):
 
         # payload_or_cert True = sign a payload
         # payload_or_cert False = gen keys, make a cert/signer
@@ -382,19 +404,12 @@ class C3(object):
         # [prepend header] for payload-or-not
 
         # <also deliver priv> if applicable
-        out = []
+
+        new_key_priv = None
         append = False      # whether to append Using's public part or link by issuer_name instead.
 
-        if payload_or_cert and using_file_part_name == "self":
-            raise TypeError("using=self is only for creating selfsigning certs, not signing payloads")
-
-        # if payload_file_name and using_file_part_name == "self":
-        #     raise TypeError("using=self is only for creating selfsigning certs, not signing payloads")
-
-
-
         # --- Key gen if applicable ---
-        if not payload_or_cert:
+        if action in (self.MAKE_SELFSIGNED, self.MAKE_INTERMEDIATE):
             # make keys
             new_key_priv, new_key_pub = self.GenKeysECDSANist256p()
 
@@ -404,21 +419,20 @@ class C3(object):
             payload_bytes = new_pub_cert_bytes
         # --- Load payload if not key-genning ---
         else:
-            payload_bytes = open(name,"rb").read()
+            payload_bytes = payload
 
 
         # --- Make a selfsign if applicable ---
-        if using_file_part_name == "self":      # we have new_key_priv because not payload_file_name is guaranteed
+        if action == self.MAKE_SELFSIGNED:
             # self-sign it, make sig
             SK = ecdsa.SigningKey.from_string(new_key_priv, ecdsa.NIST256p)
             sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name=name)  # note byname, not append
-            append = False                                                              # note byname, not append
+            append = False                                                      # note byname, not append
             sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
         # --- Sign the thing (cert or payload) using Using, if not selfsign ----
         else:
-            using_public_part, using_private_part = self.load_files(using_file_part_name)
-            SK = ecdsa.SigningKey.from_string(using_private_part, ecdsa.NIST256p)
+            SK = ecdsa.SigningKey.from_string(using_priv, ecdsa.NIST256p)
             sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name="")    # note append, not byname
             # sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name=using_file_part_name)  # if we were using byname instead of append.
             append = True                                                       # note append, not byname
@@ -436,22 +450,32 @@ class C3(object):
             # we need to:
             # 1) strip using_public_part's public_part header,
             # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
-            _, index = self.expect_key_header([KEY_LIST_SIGNER], b3.LIST, using_public_part, 0)
-            using_public_part = using_public_part[index:]
+            _, index = self.expect_key_header([KEY_LIST_SIGNER], b3.LIST, using_pub, 0)
+            using_pub = using_pub[index:]
             # 2) concat our data + using_public_part's data
-            out_public_part = das_bytes_with_hdr + using_public_part
+            out_public_part = das_bytes_with_hdr + using_pub
         else:
             out_public_part = das_bytes_with_hdr
 
-        # --- Prepend a new overall public_part header & save out files ---
-        if payload_or_cert:
-            # signed-payload output
-            out_public_with_hdr = b3.encode_item_joined(KEY_LIST_PAYLOAD, b3.LIST, out_public_part)
-            self.write_files(name, out_public_with_hdr, b"", combine=False)  # wont write private_part if its empty
+        # --- Prepend a new overall public_part header & return pub & private bytes ---
+        if action == self.SIGN_PAYLOAD:
+            key_type = KEY_LIST_PAYLOAD
         else:
-            # signer (self or chain) output
-            out_public_with_hdr = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, out_public_part)
-            self.write_files(name, out_public_with_hdr, new_key_priv, combine=True)
+            key_type = KEY_LIST_SIGNER
+        out_public_with_hdr = b3.encode_item_joined(key_type, b3.LIST, out_public_part)
+
+        return out_public_with_hdr, new_key_priv
+
+        # Caller has to write_files with combine false or true, depending.
+
+        # if payload_or_cert:
+        #     # signed-payload output
+        #     out_public_with_hdr = b3.encode_item_joined(KEY_LIST_PAYLOAD, b3.LIST, out_public_part)
+        #     self.write_files(name, out_public_with_hdr, b"", combine=False)  # wont write private_part if its empty
+        # else:
+        #     # signer (self or chain) output
+        #     out_public_with_hdr = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, out_public_part)
+        #     self.write_files(name, out_public_with_hdr, new_key_priv, combine=True)
 
 
 
@@ -473,7 +497,7 @@ class C3(object):
 
     # 7) it would be nice to get multisig in at this point?
     # 8) make the code nice with classes and stuff, big clean up of the verify side  [DONE]
-    # 9) then big clean up of the sign/make side
+    # 9) then big clean up of the sign/make side [DONE mostly]
 
     # 10) TESTS
 
@@ -557,26 +581,27 @@ def CommandlineMain():
     if cmd != "verify":
         using_name = args.using
         name = args.name
-
-    if cmd == "makesignerselfsigned":
-        c3m.MakeSign(False, name, "self")
-        # c3m.MakeSignerSelfSigned(args)
-        return
-
-    if cmd == "makesignerusingsignerappended":
-        c3m.MakeSign(False, name, using_name)
-        #c3m.MakeSignerUsingSignerAppended(args)
-        return
-
-    # if cmd == "makesignerusingsignerbyname":
-    #     c3m.MakeSignerUsingSignerByName(args)
+    #
+    # if cmd == "makesignerselfsigned":
+    #
+    #     c3m.MakeSign(False, name, "self")
+    #     # c3m.MakeSignerSelfSigned(args)
     #     return
-
-
-    if cmd == "signpayload":
-        c3m.MakeSign(True, name, using_name)
-        #c3m.SignPayload(args)
-        return
+    #
+    # if cmd == "makesignerusingsignerappended":
+    #     c3m.MakeSign(False, name, using_name)
+    #     #c3m.MakeSignerUsingSignerAppended(args)
+    #     return
+    #
+    # # if cmd == "makesignerusingsignerbyname":
+    # #     c3m.MakeSignerUsingSignerByName(args)
+    # #     return
+    #
+    #
+    # if cmd == "signpayload":
+    #     c3m.MakeSign(True, name, using_name)
+    #     #c3m.SignPayload(args)
+    #     return
 
 
     if cmd == "verify":
@@ -591,42 +616,6 @@ def CommandlineMain():
 
 
     UsageBail("Unknown command")
-#
-# def GenKeysECDSANist256p():
-#     curve = [i for i in ecdsa.curves.curves if i.name == 'NIST256p'][0]
-#     priv  = ecdsa.SigningKey.generate(curve=curve)
-#     pub   = priv.get_verifying_key()
-#     return priv.to_string(), pub.to_string()
-#
-#
-# def expect_key_header2(want_keys, want_type, buf, index):
-#     if not buf:
-#         raise StructureError("No data - buffer is empty or None")
-#     try:
-#         key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)
-#     except (IndexError, UnicodeDecodeError):
-#         raise StructureError("Header structure is invalid")  # from None
-#         # raise .. from None disables py3's chaining (cleaner unhandled prints) but isnt legal py2
-#     if key not in want_keys:
-#         raise StructureError("Incorrect key in header - wanted %r got %r" % (want_keys, key))
-#     if data_type != want_type:
-#         raise StructureError("Incorrect type in header - wanted %r got %r" % (want_type, data_type))
-#     if not has_data:
-#         raise StructureError("Invalid header - no has_data")
-#     return key, index
-
-
-# step 1: just verify the in-place stuff. So we're temporarily ignoring the fact that there's no seperate root pub key,
-#         and our root pub key is part of the incoming payload concatenation
-# step 2: write the seeker after this.
-
-
-
-
-
-
-
-
 
 
 # Policy: names are short and become the filename. They can go in the cert too.
@@ -638,24 +627,6 @@ def CommandlineMain():
 # --output combined or --output split
 
 # print(len(base64.encodebytes(b"a"*500).decode().splitlines()[0]))    = 76
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def UsageBail(msg=""):
@@ -683,363 +654,3 @@ if __name__ == "__main__":
 
 
 
-# ---- Basic fuzzing of the initial header check ----
-#
-# def FuzzEKH():
-#     for i in range(0,255):
-#         buf = six.int2byte(i) #+ b"\x0f\x55\x55"
-#         try:
-#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, buf, 0)
-#             print("%4i %02x - SUCCESS - key = %r" % (i,i, ppkey))
-#         except Exception as e:
-#             print("%4i %02x -  %s" % (i,i, e))
-#             #print(traceback.format_exc())
-#
-# def FuzzEKH2():
-#     i = 0
-#     z = {}
-#     while True:
-#         i += 1
-#         buf = random.randbytes(20)
-#         try:
-#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, buf, 0)
-#             out = "SUCCESS - key = %r" % ppkey
-#         except Exception as e:
-#             out = "%r" % e
-#
-#         #print(out)
-#         z[out] = z.get(out,0) + 1
-#
-#         if i % 100000 == 0:
-#             print()
-#             print(len(z))
-#             pprint(z)
-#
-#
-
-
-
-#
-#
-#
-# def VerifyBlock(public_part):
-#     global certs_by_name
-#     print("certs by name",certs_by_name)
-#     prevalid_certs_by_name = {}  # so self-signeds can be validated
-#     found_in_global = False
-#
-#     # public_part = b"\xdd\x37\x03\xed\x4d\x01\x44"
-#     # dd list-hdr x37=55=KEY_LIST_PAYLOAD 03=len  ed dict-hdr x4d=77=KEY_DAS 0x=len
-#     # And we're into unpack DATA_AND_SIG and fail mando checks at that point, so we can stop checking everything so much.
-#
-#
-#     # The public part should have an initial header that indicates whether the first das is a payload or a cert
-#     ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, public_part, 0)
-#     print("Initial header got key: ", ppkey,"  ",KEY2NAME[ppkey])
-#     public_part = public_part[index:]               # chop off the header
-#
-#     # Should be a list of DAS structures, so pythonize the list
-#     if not public_part:
-#         raise StructureError("Missing cert chain / payload")
-#
-#     das_list = list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)
-#     print("Got das list")
-#     pprint(das_list)
-#     #   - validated key=key_das
-#     #   - type=dict is implicit to the function
-#
-#     # unpack the certs & sigs in das_list
-#
-#     for i, das in enumerate(das_list):
-#         # dont unpack cert if this is the first das and ppkey is PAYLOAD
-#         # so DO unpack cert if this is not the first das, or if ppkey is signer
-#         if i > 0 or ppkey == KEY_LIST_SIGNER:
-#             das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_bytes))       # creates a 'none none' cert entry for the payload das.
-#
-#         # always unpack sig
-#         das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_bytes))
-#         schema_assert_mandatory_fields_truthy(SIG_SCHEMA, das.sig)
-#
-#         if "cert" in das:
-#             schema_assert_mandatory_fields_truthy(CERT_SCHEMA, das.cert)
-#             # update name:cert map/index.  (This will later have the root cert in it, and can be a cache.)
-#             prevalid_certs_by_name[das.cert.name] = das.cert
-#
-#
-#     print()
-#     print("========")
-#     print()
-#     pprint(das_list)
-#     print()
-#     print("========")
-#     print()
-#     pprint(certs_by_name)
-#     print()
-#     print("++++++++")
-#
-#     # ok we got payload bytes (das.data_bytes) and sig bytes (das.sig.sig_bytes)
-#
-#     for i, das in enumerate(das_list):
-#         print()
-#         print("next cert")
-#         found_in_global = False
-#
-#         # seek the signing cert for the sig
-#         issuer_name = das.sig.issuer_name
-#         print("sig issuer name is ",repr(issuer_name))
-#
-#         # if it's empty, that means "next cert in the chain"
-#         if not issuer_name:
-#             print("no issuer name, assuming next cert in chain is the signer")
-#
-#             if i+1 >= len(das_list):
-#                 raise VerifyError("Cert chain has no link to trust store (end of chain reached)")     # FAIL: fell off
-#
-#             next_das = das_list[i + 1]
-#             issuer_cert_pub_key_bytes = next_das.cert.pub_key
-#         # if it's not, try to get the cert from our cache
-#         # This will work for self-signed roots because their sig's issuer_name == their name
-#         else:
-#             print("got issuer name, looking up in certs_by_name")
-#             # Try it in both, if its in prevalid then ok
-#             # if its in global, then even better, and set found_in_trust_root true
-#             if issuer_name in certs_by_name:
-#                 print("found in GLOBAL certs_by_name")
-#                 issuer_cert = certs_by_name[issuer_name]
-#                 found_in_global = True
-#             elif issuer_name in prevalid_certs_by_name:
-#                 print("found in prevalid certs_by_name")
-#                 issuer_cert = prevalid_certs_by_name[issuer_name]
-#             else:
-#                 raise VerifyError("Issuer cert %r not found in trust store" % issuer_name)        # FAIL: requested name not found
-#
-#             print("got cert")
-#             issuer_cert_pub_key_bytes = issuer_cert.pub_key
-#
-#         # make ecdsa VK
-#         VK = ecdsa.VerifyingKey.from_string(issuer_cert_pub_key_bytes, ecdsa.NIST256p)
-#
-#         # Do verify
-#         ret = VK.verify(das.sig.sig_val, das.data_bytes)
-#         if i == 0 and ppkey == KEY_LIST_PAYLOAD:
-#             vname = "payload"
-#         else:
-#             vname = "cert "+das.cert.name
-#
-#         print("Verifying ", vname, " returns ",ret)
-#
-#         # ok if we got here the cert or payload is valid
-#         if ret == True:
-#             # if we found our issuer in the global store, we are successful
-#             if found_in_global == True:
-#                 print("Validated by global cert! we have won.")
-#
-#                 # TODO: only NOW do we want to load all the certs in the chain
-#                 # TODO: this needs to be reworked to only save into global, certs that have been fully validated.
-#                 #       so make a proper cert cache
-#                 if i > 0 or ppkey == KEY_LIST_SIGNER:  # put the cert in global certs_by_name
-#                     print("cert ", vname, " is valid, putting in global certs_by_name")
-#                     certs_by_name[das.cert.name] = das.cert
-#
-#                 return True
-#
-#     # otherwise we got to the end and the cert was not found in global
-#     print("got to the end and cert wasnt found in global")
-#     return False        # for now so we can use this as code_root1's loader
-#
-#     raise VerifyError("End of cert chain but no issuer found in global trust store")
-#
-#
-#     # There are 3 ways for this to fail:
-#     # 1) "fell off" - unnamed issuer cert and no next cert in line
-#     # 2) Cant Find Named Cert - in the cert store / trust store / certs_by_name etc
-#     # 3) Last cert is self-signed and verified OK but isn't in the trust store.
-#
-#     # So its about "getting to" the pretrusted cert(s).
-#     # Once we're in the trust store we can stop, and return success.
-#     # - along with the payload, if ppkey says there is a payload.
-#
-#     # (1) - fail trying to pull next_das.
-#     # (2) - cert not found in certs_by_name.
-#     # (3) - at the end but trust_store flag is not on (or something).
-#
-
-
-
-    #
-    #
-    #
-    #
-    # def MakeSignerSelfSigned(self, args):
-    #     MAKESIGNER_REQ_ARGS = ("name",)  # "expiry")  # ,"using", "output")
-    #     for req_arg in MAKESIGNER_REQ_ARGS:
-    #         if req_arg not in args:
-    #             UsageBail("please supply --%s=" % (req_arg,))
-    #
-    #     # make keys
-    #     priv_bytes, pub_bytes = GenKeysECDSANist256p()
-    #
-    #     # make pub cert for pub key
-    #     pub_cert = AttrDict(name=args.name, pub_key=pub_bytes)
-    #     pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, pub_cert)
-    #
-    #     # self-sign it, make sig
-    #     sk = ecdsa.SigningKey.from_string(priv_bytes, ecdsa.NIST256p)
-    #     sig_d = AttrDict(sig_val=sk.sign(pub_cert_bytes),
-    #                      issuer_name=args.name)  # issuer == us bc self-sign
-    #     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
-    #
-    #     # wrap cert and sig together
-    #     das = AttrDict(data_bytes=pub_cert_bytes, sig_bytes=sig_bytes)
-    #     das_bytes = b3.schema_pack(DATA_AND_SIG, das)
-    #
-    #     # prepend header for das itself so straight concatenation makes a list-of-das
-    #     das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
-    #
-    #     # prepend the overall public_part header
-    #     public_part = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, das_bytes_with_hdr)
-    #
-    #     # Save to combined file.
-    #     self.write_files(args.name, public_part, priv_bytes, combine=True)
-    #
-    #     return
-    #
-    # def MakeSignerUsingSignerAppended(self, args):
-    #     for req_arg in ("name", "using"):
-    #         if req_arg not in args:
-    #             UsageBail("please supply --%s=" % (req_arg,))
-    #
-    #     # ---- Load signer & ready the ecdsa object ----
-    #     using_public_part, using_private_part = self.load_files(args.using)
-    #     SK = ecdsa.SigningKey.from_string(using_private_part, ecdsa.NIST256p)
-    #
-    #     # make keys
-    #     priv_bytes, pub_bytes = GenKeysECDSANist256p()
-    #
-    #     # make pub cert
-    #     pub_cert = AttrDict(name=args.name, pub_key=pub_bytes)
-    #     pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, pub_cert)
-    #
-    #     # sign it, make sig
-    #     sig_d = AttrDict(sig_val=SK.sign(pub_cert_bytes))
-    #     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
-    #
-    #     # wrap cert & sig
-    #     das = AttrDict(data_bytes=pub_cert_bytes, sig_bytes=sig_bytes)
-    #     das_bytes = b3.schema_pack(DATA_AND_SIG, das)
-    #
-    #     # prepend header for das itself so straight concatenation makes a list-of-das
-    #     das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
-    #
-    #     # we need to
-    #     # 1) strip using_public_part's public_part header,
-    #     # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
-    #
-    #     _, index = expect_key_header2([KEY_LIST_SIGNER], b3.LIST, using_public_part, 0)
-    #     using_public_part = using_public_part[index:]
-    #
-    #     # 2) concat our data + using_public_part's data
-    #     out_public_part = das_bytes_with_hdr + using_public_part
-    #
-    #     # 3) prepend a new overall public_part header
-    #     out_public_part = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, out_public_part)
-    #
-    #     # Save to combined file.
-    #     self.write_files(args.name, out_public_part, priv_bytes, combine=True)
-    #
-    #
-    #
-    # def MakeSignerUsingSignerByName(self, args):
-    #     for req_arg in ("name", "using"):
-    #         if req_arg not in args:
-    #             UsageBail("please supply --%s=" % (req_arg,))
-    #
-    #     # ---- Load signer & ready the ecdsa object ----
-    #     _, using_private_part = self.load_files(args.using)
-    #     SK = ecdsa.SigningKey.from_string(using_private_part, ecdsa.NIST256p)
-    #
-    #     # make keys
-    #     priv_bytes, pub_bytes = GenKeysECDSANist256p()
-    #
-    #     # make pub cert
-    #     pub_cert = AttrDict(name=args.name, pub_key=pub_bytes)
-    #     pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, pub_cert)
-    #
-    #     # sign it, make sig
-    #     sig_d = AttrDict(sig_val=SK.sign(pub_cert_bytes) , issuer_name=args.using)
-    #     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
-    #
-    #     # wrap cert & sig
-    #     das = AttrDict(data_bytes=pub_cert_bytes, sig_bytes=sig_bytes)
-    #     das_bytes = b3.schema_pack(DATA_AND_SIG, das)
-    #
-    #     # prepend header for das itself so straight concatenation makes a list-of-das
-    #     das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
-    #
-    #     # # we need to
-    #     # # 1) strip using_public_part's public_part header,
-    #     # # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
-    #     #
-    #     # _, index = expect_key_header([KEY_LIST_SIGNER], b3.LIST, using_public_part, 0)
-    #     # using_public_part = using_public_part[index:]
-    #     #
-    #     # # 2) concat our data + using_public_part's data
-    #     # out_public_part = das_bytes_with_hdr + using_public_part
-    #
-    #     # 3) prepend a new overall public_part header
-    #     out_public_part = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, das_bytes_with_hdr)
-    #
-    #     # Save to combined file.
-    #     self.write_files(args.name, out_public_part, priv_bytes, combine=True)
-    #
-    # def SignPayload(self, args):
-    #     for req_arg in ("name", "using"):  # using name as the input filename too atm.
-    #         if req_arg not in args:
-    #             UsageBail("please supply --%s=" % (req_arg,))
-    #
-    #     # ---- Load signer & ready the ecdsa object ----
-    #     using_public_part, using_private_part = self.load_files(args.using)
-    #     SK = ecdsa.SigningKey.from_string(using_private_part, ecdsa.NIST256p)
-    #
-    #     # load payload
-    #     payload_bytes = open(args.name, "rb").read()
-    #
-    #     # sign it, make sig
-    #     sig_actual_bytes = SK.sign(payload_bytes)
-    #     print("sig_actual_bytes ", repr(sig_actual_bytes))
-    #     print(len(sig_actual_bytes))
-    #
-    #     sig_d = AttrDict(sig_val=sig_actual_bytes)
-    #     sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
-    #
-    #     # wrap payload & sig
-    #     das = AttrDict(data_bytes=payload_bytes, sig_bytes=sig_bytes)
-    #     das_bytes = b3.schema_pack(DATA_AND_SIG, das)
-    #
-    #     # prepend header for das itself so straight concatenation makes a list-of-das
-    #     das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
-    #
-    #     # # concat using's public with our cas
-    #     # output_public = das_bytes_with_hdr + using_public_part
-    #
-    #     # we need to
-    #     # 1) strip using_public_part's public_part header,
-    #     # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
-    #
-    #     _, index = expect_key_header2([KEY_LIST_SIGNER], b3.LIST, using_public_part, 0)
-    #     using_public_part = using_public_part[index:]
-    #
-    #     # 2) concat our data + using_public_part's data
-    #     out_public_part = das_bytes_with_hdr + using_public_part
-    #
-    #     # 3) prepend a new overall public_part header
-    #     out_public_part = b3.encode_item_joined(KEY_LIST_PAYLOAD, b3.LIST, out_public_part)
-    #
-    #     # Save to combined file.
-    #     self.write_files(args.name, out_public_part, b"", combine=False)  # wont write private_part if its empty
-    #
-    #
-    # # using=using name, mode=append or link.
-    # # payload or no payload.
-    #
-    #

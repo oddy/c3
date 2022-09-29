@@ -19,7 +19,7 @@ def c3m():
     c3_obj = c3main.C3()
     return c3_obj
 
-# ==================================================================================================
+# ======== Verify Tests ============================================================================
 
 root1 = """
 2UKgAelNnAEJAUsZAQVyb290MQkCQDwdIh7DZkYyPcz+W2cBYozFZ38FanSeEHW9sSsZB+uyNiwr
@@ -106,6 +106,51 @@ def test_load_nulls(c3m):
 
 
 
+# ======== Sign Tests ============================================================================
+
+
+def test_sign_selfsigned(c3m):
+    # make a selfsigned then verify it and check the cert name == the sig name
+
+    pub_part_bytes, priv_part_bytes = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name="test1")
+    chain = c3m.load(pub_part_bytes)
+    pprint(chain)
+    c3m.add_trusted_certs(pub_part_bytes)
+    ret = c3m.verify(chain)
+    assert ret is True      # no payload, successful verify
+    assert chain[0].cert.name == chain[0].sig.issuer_name    # self-signed
+
+
+#               |     no payload             payload
+#  -------------+-------------------------------------------------
+#  using cert   |     make chain signer      sign payload
+#               |
+#  using self   |     make self signer       ERROR invalid state
+
+
+
+def test_sign_chainsigner(c3m):
+    # make a selfsigned, add it to trusted, make an inter using the selfsigned,
+    # verify the inter.
+    # (might fail because inter not referring to selfsigned by name but by append)
+    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9")
+    c3m.add_trusted_certs(root_pub)
+
+    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_priv=root_priv)
+
+    chain = c3m.load(inter_pub)
+    ret = c3m.verify(chain)
+    assert ret is True      # no payload, successful verify
+    #assert chain[0].cert.name == chain[0].sig.issuer_name    # self-signed
+
+
+
+
+
+
+
+
+
 
 # ---- Truncate and glitch loops -----
 
@@ -185,3 +230,37 @@ if __name__ == '__main__':
     #truncmain()
     #glitchmain()
     smallrandfuzz()
+
+
+
+# ---- Basic fuzzing of the initial header check ----
+#
+# def FuzzEKH():
+#     for i in range(0,255):
+#         buf = six.int2byte(i) #+ b"\x0f\x55\x55"
+#         try:
+#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, buf, 0)
+#             print("%4i %02x - SUCCESS - key = %r" % (i,i, ppkey))
+#         except Exception as e:
+#             print("%4i %02x -  %s" % (i,i, e))
+#             #print(traceback.format_exc())
+#
+# def FuzzEKH2():
+#     i = 0
+#     z = {}
+#     while True:
+#         i += 1
+#         buf = random.randbytes(20)
+#         try:
+#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, buf, 0)
+#             out = "SUCCESS - key = %r" % ppkey
+#         except Exception as e:
+#             out = "%r" % e
+#
+#         #print(out)
+#         z[out] = z.get(out,0) + 1
+#
+#         if i % 100000 == 0:
+#             print()
+#             print(len(z))
+#             pprint(z)
