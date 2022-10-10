@@ -4,16 +4,12 @@ from __future__ import print_function
 import sys, re, base64, os, traceback, random
 from pprint import pprint
 
+import ecdsa
 import six
 
 import b3
-b3.composite_schema.strict_mode = True   # to make b3 error when we field names wrong when schema_packing
-import ecdsa
-
-
-# Todo: Consider fuzz-friendly-ing the structure error messages.
-
-# So far we dont have any optional fields.
+# ake b3 error when we field names wrong when schema_packing:
+b3.composite_schema.strict_mode = True
 
 # tag/key values (mostly for sanity checking)
 # level0
@@ -21,8 +17,11 @@ KEY_LIST_PAYLOAD = 55  # cert chain with a payload as the first entry
 KEY_LIST_SIGNER = 66   # cert chain with a cert as the first entry
 # level1
 KEY_DAS = 77
+# Policy: we are NOT doing multi-sig DAS now. Too hard.
+# Note: in future if multi-signature support is wanted, we can add new tag/key values to indicate
+#       the different data-and-[list of signatures] structure.
 
-KEY2NAME = {55:"KEY_LIST_PAYLOAD", 66:"KEY_LIST_SIGNER", 77:"KEY_DAS"}
+KEY2NAME = {55 : "KEY_LIST_PAYLOAD", 66 : "KEY_LIST_SIGNER", 77 : "KEY_DAS"}
 
 CERT_SCHEMA = (
     (b3.UTF8,  "name",  1, True),
@@ -32,7 +31,7 @@ CERT_SCHEMA = (
 
 SIG_SCHEMA = (
     (b3.BYTES, "sig_val", 1,  True),
-    (b3.UTF8, "issuer_name", 2, False),     # field value can be optional
+    (b3.UTF8, "issuer_name", 2, False),  # value can be empty. todo: want this to be This is bytes for IDs.
 )
 
 DATA_AND_SIG = (
@@ -379,19 +378,16 @@ class C3(object):
     SIGN_PAYLOAD = 3
 
     # name = name to give selfsigned cert, name to give inter cert.  (payload doesnt get a name)
-    # payload_bytes  = the payload, if signing a payload
-    # using_pub_bytes, using_priv_bytes = the parts of the Using keypair, if not making selfsigned
+    # payload  = the payload bytes, if signing a payload
+    # using_priv, using_pub/using_name = the parts of the Using keypair, if not making selfsigned
 
-
-    def MakeSign(self, action, name="", payload="", using_pub=b"", using_priv=b""):
-
-        # payload_or_cert True = sign a payload
-        # payload_or_cert False = gen keys, make a cert/signer
-
-        # payload = afilename
-        # payload = nothing -> generate a key
-        # using == self  -> selfsign
-        # using = afilename
+    def MakeSign(self, action, name="", payload="", using_priv=b"", using_pub=b"", using_name=""):          # todo: change using_name to bytes. Also change name to bytes.
+        # if using Using, sanity-check using - enforce exclusive either-or
+        if action in (self.MAKE_INTERMEDIATE, self.SIGN_PAYLOAD):
+            if not using_name and not using_pub:
+                raise ValueError("both using_name and using_pub are empty, please select one")
+            if using_name and using_pub:
+                raise ValueError("both using_name and using_pub have values, please select one")
 
         # [key gen]  if applicable   - if not payload
 
@@ -399,14 +395,13 @@ class C3(object):
 
         # [sign the thing using using] if not selfsign
 
-        # [append pub] if applicable   - if not selfsign (and maybe later, options + DoNotDistribute)
+        # [append pub] if applicable   - if not selfsign and using_pub present
 
         # [prepend header] for payload-or-not
 
         # <also deliver priv> if applicable
 
         new_key_priv = None
-        append = False      # whether to append Using's public part or link by issuer_name instead.
 
         # --- Key gen if applicable ---
         if action in (self.MAKE_SELFSIGNED, self.MAKE_INTERMEDIATE):
@@ -421,32 +416,29 @@ class C3(object):
         else:
             payload_bytes = payload
 
-
         # --- Make a selfsign if applicable ---
         if action == self.MAKE_SELFSIGNED:
             # self-sign it, make sig
             SK = ecdsa.SigningKey.from_string(new_key_priv, ecdsa.NIST256p)
-            sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name=name)  # note byname, not append
-            append = False                                                      # note byname, not append
+            sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name=name)  # note byname
             sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
         # --- Sign the thing (cert or payload) using Using, if not selfsign ----
         else:
             SK = ecdsa.SigningKey.from_string(using_priv, ecdsa.NIST256p)
-            sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name="")    # note append, not byname
-            # sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name=using_file_part_name)  # if we were using byname instead of append.
-            append = True                                                       # note append, not byname
+            sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name=using_name)
+            # note  ^^^ issuer_name can be blank, in which case using_pub should have bytes to append
             sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
         # --- Make data-and-sig structure ---
         das = AttrDict(data_bytes=payload_bytes, sig_bytes=sig_bytes)
         das_bytes = b3.schema_pack(DATA_AND_SIG, das)
+
         # --- prepend header for das itself so straight concatenation makes a list-of-das ---
         das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
 
-
         # --- Append Using's public_part (the chain) if applicable ---
-        if append:
+        if using_pub and action != self.MAKE_SELFSIGNED:
             # we need to:
             # 1) strip using_public_part's public_part header,
             # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)

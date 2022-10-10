@@ -111,28 +111,54 @@ def test_load_nulls(c3m):
 
 def test_sign_selfsigned(c3m):
     # make a selfsigned then verify it and check the cert name == the sig name
-
     pub_part_bytes, priv_part_bytes = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name="test1")
-    chain = c3m.load(pub_part_bytes)
-    pprint(chain)
     c3m.add_trusted_certs(pub_part_bytes)
+
+    chain = c3m.load(pub_part_bytes)
     ret = c3m.verify(chain)
     assert ret is True      # no payload, successful verify
     assert chain[0].cert.name == chain[0].sig.issuer_name    # self-signed
 
 
-#               |     no payload             payload
-#  -------------+-------------------------------------------------
-#  using cert   |     make chain signer      sign payload
+#               |     no payload                  payload
+#  -------------+----------------------------------------------------------
+#  using cert   |     make chain signer           sign payload
 #               |
-#  using self   |     make self signer       ERROR invalid state
+#  using self   |     make self signer            ERROR invalid state
 
 
+#               |     using_name                  no using_name
+#  -------------+----------------------------------------------------------
+#  using_pub    |     invalid                     append cert, blank name
+#               |
+#  no using_pub |     no append cert, link name   invalid
 
-def test_sign_chainsigner(c3m):
-    # make a selfsigned, add it to trusted, make an inter using the selfsigned,
-    # verify the inter.
-    # (might fail because inter not referring to selfsigned by name but by append)
+
+def test_sign_supply_neither_inval(c3m):
+    with pytest.raises(ValueError):
+        inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9")
+
+
+def test_sign_supply_both_inval(c3m):
+    with pytest.raises(ValueError):
+        inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=b"a", using_name="root9")
+        # Note it doen't get to needing the missing using_priv
+
+
+def test_sign_inter_name(c3m):
+    # Root cert
+    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9")
+    c3m.add_trusted_certs(root_pub)
+
+    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_name="root9", using_priv=root_priv)
+
+    chain = c3m.load(inter_pub)
+    ret = c3m.verify(chain)
+    assert ret is True      # no payload, successful verify
+
+
+def test_sign_inter_append(c3m):
+    # Root cert
     root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9")
     c3m.add_trusted_certs(root_pub)
 
@@ -141,7 +167,43 @@ def test_sign_chainsigner(c3m):
     chain = c3m.load(inter_pub)
     ret = c3m.verify(chain)
     assert ret is True      # no payload, successful verify
-    #assert chain[0].cert.name == chain[0].sig.issuer_name    # self-signed
+
+# Note that this doesn't fail, even though we are *appending* the root9 cert itself into the chain
+#      which you're not supposed to do. It succeeds because root9 is in trusted_certs and verify
+#      sees that the NAME root9 is in trusted_certs so sets the found_in_trusted flag so that
+#      UntrustedChainError doesn't trigger at the end.
+
+# Note this looks like it would open us up to malicious actors appending their own cert with the same
+#      NAME, but the actual signature verification step is always done, which defends against this,
+#      as shown by the next test.
+
+
+def test_sign_rootcert_namecollide(c3m):
+    # Legit guy
+    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root5")
+    c3m.add_trusted_certs(root_pub)
+    # Attacker guy
+    evil_pub, evil_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root5")   # NOTE same name
+    # evil chain
+    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=evil_pub, using_priv=evil_priv)
+    chain = c3m.load(inter_pub)
+    with pytest.raises(c3main.InvalidSignatureError):
+        ret = c3m.verify(chain)
+
+
+
+def test_sign_payload(c3m):
+    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9")
+    c3m.add_trusted_certs(root_pub)
+    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_name="root9", using_priv=root_priv)
+
+    payload = b"How are you gentlemen"
+    signed_payload, should_be_none = c3m.MakeSign(c3m.SIGN_PAYLOAD, payload=payload, using_pub=inter_pub, using_priv=inter_priv)
+    assert should_be_none is None
+
+    chain = c3m.load(signed_payload)
+    ret_payload = c3m.verify(chain)
+    assert ret_payload == payload   # successful verify returns payload
 
 
 
