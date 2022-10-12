@@ -1,15 +1,24 @@
 
 from __future__ import print_function
 
-import sys, re, base64, os, traceback, random
+import sys, re, base64, os, traceback, random, binascii
 from pprint import pprint
 
 import ecdsa
 import six
 
+import pwinput  # todo: for c3sign only. v1.0.2 vetted.
+
 import b3
 # ake b3 error when we field names wrong when schema_packing:
 b3.composite_schema.strict_mode = True
+
+import pass_protect     # todo: packagize
+
+# Todo: distribute Verify as it's own package/module.
+#       b/c passprotect depends on e.g pathlib2, sodium, etc.
+
+# --- Public structure stuff ---
 
 # tag/key values (mostly for sanity checking)
 # level0
@@ -21,7 +30,7 @@ KEY_DAS = 77
 # Note: in future if multi-signature support is wanted, we can add new tag/key values to indicate
 #       the different data-and-[list of signatures] structure.
 
-KEY2NAME = {55 : "KEY_LIST_PAYLOAD", 66 : "KEY_LIST_SIGNER", 77 : "KEY_DAS"}
+KEY_PRIV_CRCWRAPPED = 88       # "priv data with a crc32 integrity check"
 
 CERT_SCHEMA = (
     (b3.UTF8,  "name",  1, True),
@@ -39,13 +48,26 @@ DATA_AND_SIG = (
     (b3.BYTES, "sig_bytes", 2, True),
 )
 
+# --- Private structure stuff ---
 
-class AttrDict(dict):
-    def __getattr__(self, name):
-        return self[name]
+PRIV_CRCWRAPPED = (
+    (b3.UVARINT, "privtype", 1, True),      # protection method (e.g. bare/none, or pass_protect)
+    (b3.UVARINT, "keytype",  2, True),      # actual type of private key (e.g. ecdsa 256p)
+    (b3.BYTES,   "privdata", 3, True),
+    (b3.UVARINT, "crc32",    4, True),      # crc of privdata for integrity check
+)
+
+# Add more of these as we get more key types and/or more encryption mechanisms
+PRIVTYPE_BARE = 1
+PRIVTYPE_PASS_PROTECT = 2
+KEYTYPE_ECDSA_256P = 1
+KNOWN_PRIVTYPES = [1,2]
+KNOWN_KEYTYPES = [1]
 
 
-# Errors
+KEY2NAME = {55 : "KEY_LIST_PAYLOAD", 66 : "KEY_LIST_SIGNER", 77 : "KEY_DAS", 88 : "KEY_PRIV_CRCWRAPPED"}
+
+# --- Errors ---
 class C3Error(ValueError):
     pass
 class StructureError(C3Error):  # something wrong with the data/binary structure; misparse, corrupt
@@ -60,7 +82,13 @@ class ShortChainError(VerifyError):  # the next cert for verifying is missing of
     pass
 class UntrustedChainError(VerifyError):  # the chain ends with a self-sign we dont have in Trusted
     pass
+class PasswordEntryError(C3Error):      # want password input but not running interactive
+    pass
 
+
+class AttrDict(dict):
+    def __getattr__(self, name):
+        return self[name]
 
 
 # Policy: verify() only reads from self.trusted_certs, it doesnt write anything into there.
@@ -69,6 +97,7 @@ class UntrustedChainError(VerifyError):  # the chain ends with a self-sign we do
 class C3(object):
     def __init__(self):
         self.trusted_certs = {}   # by name. For e.g. root certs etc.
+        self.pass_protect = pass_protect.PassProtect()      # todo: c3sign only
         return
 
     def add_trusted_certs(self, certs_bytes, force=False):
@@ -83,6 +112,79 @@ class C3(object):
                 continue
             self.trusted_certs[das.cert.name] = das.cert
         return
+
+    # ============ Private key encryption etc ======================================================
+
+    # in: block bytes from e.g. LoadFiles
+    # out: keytype, privtype, shucked privbytes
+    # sanity & crc32 check the priv block, then shuck it and return the inner data.
+    # caller goes ok if privtype is pass_protect use pass_protect to decrypt the block etc.
+
+    def load_priv_block(self, block_bytes):
+        _, index = self.expect_key_header([KEY_PRIV_CRCWRAPPED], b3.DICT, block_bytes, 0)
+        privd = AttrDict(b3.schema_unpack(PRIV_CRCWRAPPED, block_bytes[index:]))
+        # --- Sanity checks ---
+        self.schema_assert_mandatory_fields_truthy(PRIV_CRCWRAPPED, privd)
+        if privd.privtype not in KNOWN_PRIVTYPES:
+            raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.privtype, KNOWN_PRIVTYPES))
+        if privd.keytype not in KNOWN_KEYTYPES:
+            raise StructureError("Unknown keytype %d in priv block (wanted %r)" % (privd.keytype, KNOWN_KEYTYPES))
+        # --- Integrity check ---
+        data_crc = binascii.crc32(privd.privdata, 0) % (1 << 32)
+        if data_crc != privd.crc32:
+            raise StructureError("Data corrupt priv block - crc32 check failed")
+        return privd
+        # return privd.privtype, privd.keytype, privd.privdata
+
+    # Has a "get password from user" loop
+    # here is where we would demux different private protection methods also.
+    # - currently we just have Bare and pass_protect
+
+    # Policy: we're not supporting stdin-redirect for entering passwords.
+    #         it's environment variable or interactive entry only.
+
+    def get_password(self):
+        interactive = False
+        if "C3SIGN_PASSWORD" in os.environ:
+            passw = os.environ["C3SIGN_PASSWORD"]
+        elif not sys.stdin.isatty():
+            raise PasswordEntryError("Private key password can't be entered and C3SIGN_PASSWORD not set")
+        else:
+            interactive = True
+            prompt = "Private key password: "
+            if "C3SIGN_SHOW_PASS" in os.environ:        # for debugging
+                passw = six.moves.input(prompt)
+            else:
+                passw = pwinput.pwinput(prompt)
+        return passw, interactive
+
+    def yield_private_key(self, privd):
+        if privd.privtype == PRIVTYPE_BARE:
+            return privd.privdata
+        if privd.privtype != PRIVTYPE_PASS_PROTECT:
+            raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.privtype, KNOWN_PRIVTYPES))
+        if self.pass_protect.DualPasswordsNeeded(privd.privdata):  # todo: allow for dual passwords
+            raise NotImplementedError("Private key wants dual passwords")
+
+        # --- Password possibly retry loop ---
+        priv_ret = b""
+        while not priv_ret:
+            interactive, passw = self.get_password()
+            if not passw:
+                print("No password supplied, exiting")
+                break
+            try:
+                priv_ret = self.pass_protect.SinglePassDecrypt(privd.privdata, passw)
+            except Exception as e:
+                print("Failed decrypting private key: ",str(e))
+                if interactive:     # user is trying passwords
+                    continue        # let user try again
+                else:
+                    break           # non-interactive password is wrong
+        return priv_ret
+
+
+
 
     # ============ Load and Verify =================================================================
 
@@ -344,12 +446,15 @@ class C3(object):
 
     # ============================== Signing =======================================================
 
-    # This does not count using write_files or read_files
+    #               |     no payload             payload
+    #  -------------+-------------------------------------------------
+    #  using cert   |     make chain signer      sign payload
+    #               |
+    #  using self   |     make self signer       ERROR invalid state
 
     # load_files()  single or combined files ->  public_part bytes and private_part bytes maybe
     # load() = public_part bytes -> list of Data-And-Sigs items.
     # verify() = Data-And-Sigs items list -> payload bytes or an Exception
-
 
     # write_files()  public_part bytes and private_part bytes maybe -> single or combined files
 
@@ -359,18 +464,12 @@ class C3(object):
     # Cannot be seperated like load and verify are, nor do we want to.
 
 
-
     def GenKeysECDSANist256p(self):
         curve = [i for i in ecdsa.curves.curves if i.name == 'NIST256p'][0]
         priv = ecdsa.SigningKey.generate(curve=curve)
         pub = priv.get_verifying_key()
         return priv.to_string(), pub.to_string()
 
-    #               |     no payload             payload
-    #  -------------+-------------------------------------------------
-    #  using cert   |     make chain signer      sign payload
-    #               |
-    #  using self   |     make self signer       ERROR invalid state
 
     # Make/Sign actions:
     MAKE_SELFSIGNED = 1
@@ -388,18 +487,6 @@ class C3(object):
                 raise ValueError("both using_name and using_pub are empty, please select one")
             if using_name and using_pub:
                 raise ValueError("both using_name and using_pub have values, please select one")
-
-        # [key gen]  if applicable   - if not payload
-
-        # [make a selfsign] if applicable  - if using = self (and not payload). cant sign a payload with self, error.
-
-        # [sign the thing using using] if not selfsign
-
-        # [append pub] if applicable   - if not selfsign and using_pub present
-
-        # [prepend header] for payload-or-not
-
-        # <also deliver priv> if applicable
 
         new_key_priv = None
 
@@ -458,6 +545,8 @@ class C3(object):
 
         return out_public_with_hdr, new_key_priv
 
+
+
         # Caller has to write_files with combine false or true, depending.
 
         # if payload_or_cert:
@@ -495,8 +584,8 @@ class C3(object):
 
     # AND THEN
 
-    # multi-signature
-    # keytypes & libsodium & libsodium loading
+    # multi-signature   [NO]
+    # keytypes & libsodium & libsodium loading  [NO]
     # passprotect porting to b3
     # File saving, split/combine & ascii                [MOSTLY DONE]
     # File loading, --using, split/combine & ascii      [MOSTLY DONE]
@@ -504,8 +593,8 @@ class C3(object):
     # clean up commandline API and function call API
     # list-signatures, multi cert seeking, building a chain, looping through a chain.  [MOSTLY DONE]
     # Turning the chain into python data structure  [DONE]
-    # libsodium and how things are gonna have to be a class for libsodium, so it can load its DLL on startup.
-    # vetting the libsodium dlls with a hash. (we need this because then they vet everything else)
+    # libsodium and how things are gonna have to be a class for libsodium, so it can load its DLL on startup. [NO]
+    # vetting the libsodium dlls with a hash. (we need this because then they vet everything else)  [NO]
 
     # THEN
 

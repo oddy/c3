@@ -108,18 +108,6 @@ def test_load_nulls(c3m):
 
 # ======== Sign Tests ============================================================================
 
-
-def test_sign_selfsigned(c3m):
-    # make a selfsigned then verify it and check the cert name == the sig name
-    pub_part_bytes, priv_part_bytes = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name="test1")
-    c3m.add_trusted_certs(pub_part_bytes)
-
-    chain = c3m.load(pub_part_bytes)
-    ret = c3m.verify(chain)
-    assert ret is True      # no payload, successful verify
-    assert chain[0].cert.name == chain[0].sig.issuer_name    # self-signed
-
-
 #               |     no payload                  payload
 #  -------------+----------------------------------------------------------
 #  using cert   |     make chain signer           sign payload
@@ -134,18 +122,29 @@ def test_sign_selfsigned(c3m):
 #  no using_pub |     no append cert, link name   invalid
 
 
-def test_sign_supply_neither_inval(c3m):
+def test_make_selfsigned(c3m):
+    # make a selfsigned then verify it and check the cert name == the sig name
+    pub_part_bytes, priv_part_bytes = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name="test1")
+    c3m.add_trusted_certs(pub_part_bytes)
+
+    chain = c3m.load(pub_part_bytes)
+    ret = c3m.verify(chain)
+    assert ret is True      # no payload, successful verify
+    assert chain[0].cert.name == chain[0].sig.issuer_name    # self-signed
+
+
+def test_make_supply_neither_inval(c3m):
     with pytest.raises(ValueError):
         inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9")
 
 
-def test_sign_supply_both_inval(c3m):
+def test_make_supply_both_inval(c3m):
     with pytest.raises(ValueError):
         inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=b"a", using_name="root9")
         # Note it doen't get to needing the missing using_priv
 
 
-def test_sign_inter_name(c3m):
+def test_make_inter_name(c3m):
     # Root cert
     root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9")
     c3m.add_trusted_certs(root_pub)
@@ -157,7 +156,7 @@ def test_sign_inter_name(c3m):
     assert ret is True      # no payload, successful verify
 
 
-def test_sign_inter_append(c3m):
+def test_make_inter_append(c3m):
     # Root cert
     root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9")
     c3m.add_trusted_certs(root_pub)
