@@ -1,5 +1,6 @@
 
-import sys
+import sys, os
+import six
 
 
 if sys.platform == "win32":
@@ -18,7 +19,24 @@ else:
         return ch
 
 
-def get_password(prompt="P4ssword: "):
+# Policy: we're not supporting stdin-redirect for entering passwords.
+#         it's environment variable or interactive entry only.
+
+# returns password & flag for whether password was input interactively.
+
+def get_password(prompt, env_var="", show_pass_var=""):
+    interactive = False
+    if env_var and env_var in os.environ:
+        return os.environ[env_var], False
+    elif not sys.stdin.isatty():
+        raise ValueError("Private key password can't be entered and %r env var not set" % env_var)
+    else:
+        return enter_password(prompt, show_pass_var in os.environ), True
+
+
+def enter_password(prompt="P4ssword: ", mask=True):
+    if not mask:
+        return six.moves.input(prompt)
     sys.stdout.write(prompt)
     sys.stdout.flush()
     pw = []

@@ -13,7 +13,9 @@ import b3
 # ake b3 error when we field names wrong when schema_packing:
 b3.composite_schema.strict_mode = True
 
+import getpassword
 import pass_protect     # todo: packagize
+
 
 # Todo: distribute Verify as it's own package/module.
 #       b/c passprotect depends on e.g pathlib2, sodium, etc.
@@ -82,8 +84,6 @@ class ShortChainError(VerifyError):  # the next cert for verifying is missing of
     pass
 class UntrustedChainError(VerifyError):  # the chain ends with a self-sign we dont have in Trusted
     pass
-class PasswordEntryError(C3Error):      # want password input but not running interactive
-    pass
 
 
 class AttrDict(dict):
@@ -115,6 +115,9 @@ class C3(object):
 
     # ============ Private key encryption etc ======================================================
 
+    # policy: how to use:
+    #         # self.MakeSign( blah blah using_priv=self.yield_private_key(self.load_priv_block(self.LoadFiles(name).priv_block))
+
     # in: block bytes from e.g. LoadFiles
     # out: keytype, privtype, shucked privbytes
     # sanity & crc32 check the priv block, then shuck it and return the inner data.
@@ -140,23 +143,7 @@ class C3(object):
     # here is where we would demux different private protection methods also.
     # - currently we just have Bare and pass_protect
 
-    # Policy: we're not supporting stdin-redirect for entering passwords.
-    #         it's environment variable or interactive entry only.
-
-    def get_password(self):
-        interactive = False
-        if "C3SIGN_PASSWORD" in os.environ:
-            passw = os.environ["C3SIGN_PASSWORD"]
-        elif not sys.stdin.isatty():
-            raise PasswordEntryError("Private key password can't be entered and C3SIGN_PASSWORD not set")
-        else:
-            interactive = True
-            prompt = "Private key password: "
-            if "C3SIGN_SHOW_PASS" in os.environ:        # for debugging
-                passw = six.moves.input(prompt)
-            else:
-                passw = pwinput.pwinput(prompt)
-        return passw, interactive
+    # Note: may return nothing (b"") as well as exceptioning.
 
     def yield_private_key(self, privd):
         if privd.privtype == PRIVTYPE_BARE:
@@ -168,8 +155,9 @@ class C3(object):
 
         # --- Password possibly retry loop ---
         priv_ret = b""
+        prompt = "Private key password: "
         while not priv_ret:
-            interactive, passw = self.get_password()
+            passw, interactive = getpassword.get_password(prompt, "C3_PASSWORD", "C3_SHOW_PASS")
             if not passw:
                 print("No password supplied, exiting")
                 break
