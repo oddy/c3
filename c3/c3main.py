@@ -74,6 +74,8 @@ class C3Error(ValueError):
     pass
 class StructureError(C3Error):  # something wrong with the data/binary structure; misparse, corrupt
     pass
+class IntegrityError(StructureError):  # the crc32 in the privkey block doesn't match block contents
+    pass
 class VerifyError(C3Error):     # parent error for failures in the verification process
     pass
 class InvalidSignatureError(VerifyError):   # cryptographic signature failed verification
@@ -113,7 +115,7 @@ class C3(object):
             self.trusted_certs[das.cert.name] = das.cert
         return
 
-    # ============ Private key encryption etc ======================================================
+    # ============ Private key decryption  =========================================================
 
     # policy: how to use:
     #         # self.MakeSign( blah blah using_priv=self.yield_private_key(self.load_priv_block(self.LoadFiles(name).priv_block))
@@ -135,17 +137,17 @@ class C3(object):
         # --- Integrity check ---
         data_crc = binascii.crc32(privd.privdata, 0) % (1 << 32)
         if data_crc != privd.crc32:
-            raise StructureError("Data corrupt priv block - crc32 check failed")
+            raise IntegrityError("Private key block failed data integrity check (crc32)")
         return privd
-        # return privd.privtype, privd.keytype, privd.privdata
+
 
     # Has a "get password from user" loop
     # here is where we would demux different private protection methods also.
     # - currently we just have Bare and pass_protect
 
-    # Note: may return nothing (b"") as well as exceptioning.
+    # Todo: do we want this to return blank, or exception?
 
-    def yield_private_key(self, privd):
+    def decrypt_private_key(self, privd):
         if privd.privtype == PRIVTYPE_BARE:
             return privd.privdata
         if privd.privtype != PRIVTYPE_PASS_PROTECT:
@@ -153,24 +155,54 @@ class C3(object):
         if self.pass_protect.DualPasswordsNeeded(privd.privdata):  # todo: allow for dual passwords
             raise NotImplementedError("Private key wants dual passwords")
 
-        # --- Password possibly retry loop ---
+        # --- Try password from environment variables ---
+        passw = getpassword.get_env_password()
+        if passw:
+            priv_ret = self.pass_protect.SinglePassDecrypt(privd.privdata, passw)
+            # Note exceptions are propagated right out here, its an exit if this decrypt fails.
+            return priv_ret
+
+        # --- Try password from user ---
+        prompt = "Password to unlock private key: "
         priv_ret = b""
-        prompt = "Private key password: "
         while not priv_ret:
-            passw, interactive = getpassword.get_password(prompt, "C3_PASSWORD", "C3_SHOW_PASS")
+            passw = getpassword.get_enter_password(prompt)
             if not passw:
-                print("No password supplied, exiting")
-                break
+                raise ValueError("No password supplied, exiting")
+                # print("No password supplied, exiting")
+                # break
+
             try:
                 priv_ret = self.pass_protect.SinglePassDecrypt(privd.privdata, passw)
             except Exception as e:
-                print("Failed decrypting private key: ",str(e))
-                if interactive:     # user is trying passwords
-                    continue        # let user try again
-                else:
-                    break           # non-interactive password is wrong
+                print("Failed decrypting private key: ", str(e))
+                continue        # let user try again
         return priv_ret
 
+    # ============ Private key encryption  =========================================================
+
+    # given private key bytes
+    # encrypt em, getting a password from the user, if that is wanted.
+
+    def make_encrypt_private_key_block(self, bare_priv_bytes, bare=False):
+        if bare:                    # no encryption needed
+            priv_bytes = bare_priv_bytes
+        else:
+            prompt1 = "Private  key encryption password"
+            prompt2 = "Re-enter key encryption password"
+            passw = getpassword.get_double_enter_setting_password(prompt1, prompt2)
+            if not passw:
+                return b""
+            priv_bytes = self.pass_protect.SinglePassEncrypt(bare_priv_bytes, passw)
+
+        privd = AttrDict()
+        privd["keytype"] = KEYTYPE_ECDSA_256P
+        privd["privtype"] = PRIVTYPE_BARE if bare else PRIVTYPE_PASS_PROTECT
+        privd["privdata"] = priv_bytes
+        privd["crc32"] = binascii.crc32(privd.privdata, 0) % (1 << 32)
+        out_bytes = b3.schema_pack(PRIV_CRCWRAPPED, privd)
+        out_bytes_with_hdr = b3.encode_item_joined(KEY_PRIV_CRCWRAPPED, b3.DICT, out_bytes)
+        return out_bytes_with_hdr
 
 
 
@@ -467,6 +499,8 @@ class C3(object):
     # name = name to give selfsigned cert, name to give inter cert.  (payload doesnt get a name)
     # payload  = the payload bytes, if signing a payload
     # using_priv, using_pub/using_name = the parts of the Using keypair, if not making selfsigned
+    # Note: incoming using_priv comes in bare, caller must decrypt.
+    #       return var new_key_priv goes out bare, caller must encrypt.
 
     def MakeSign(self, action, name="", payload="", using_priv=b"", using_pub=b"", using_name=""):          # todo: change using_name to bytes. Also change name to bytes.
         # if using Using, sanity-check using - enforce exclusive either-or

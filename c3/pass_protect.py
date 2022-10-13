@@ -39,7 +39,7 @@ class PassProtect(object):
 
     def Pack(s, num_passes, salt, xpayloads):
         plen = len(xpayloads[0])
-        return encode_uvarint(num_passes) + encode_uvarint(len(salt)) + encode_uvarint(plen) + salt + ''.join(xpayloads)
+        return encode_uvarint(num_passes) + encode_uvarint(len(salt)) + encode_uvarint(plen) + salt + b''.join(xpayloads)
 
     def Unpack(s, buf):
         idx = 0

@@ -2,6 +2,10 @@
 import sys, os
 import six
 
+# environment variables for priv key crypting
+PASS_VAR = "C3_PASSWORD"
+SHOW_VAR = "C3_SHOW_PASS"
+
 
 if sys.platform == "win32":
     from msvcrt import getch  # noqa
@@ -21,28 +25,30 @@ else:
 
 # Policy: we're not supporting stdin-redirect for entering passwords.
 #         it's environment variable or interactive entry only.
+# Policy: environment variable password must not be blank if present.
 
-# returns password & flag for whether password was input interactively.
+def get_env_password():
+    if PASS_VAR and PASS_VAR in os.environ and os.environ[PASS_VAR]:
+        return os.environ[PASS_VAR]
+    return ""
 
-def get_password(prompt, env_var="", show_pass_var=""):
-    interactive = False
-    if env_var and env_var in os.environ:
-        return os.environ[env_var], False
-    elif not sys.stdin.isatty():
-        raise ValueError("Private key password can't be entered and %r env var not set" % env_var)
+
+def get_enter_password(prompt):
+    if not sys.stdin.isatty():       # this assumes get_env_password has been called
+        raise ValueError("Password can't be entered (%r environment variable can be used)" % PASS_VAR)
     else:
-        return enter_password(prompt, show_pass_var in os.environ), True
+        return enter_password(prompt, SHOW_VAR in os.environ)
 
 
-def enter_password(prompt="P4ssword: ", mask=True):
-    if not mask:
+def enter_password(prompt="Password: ", dontmask=False):
+    if dontmask:
         return six.moves.input(prompt)
     sys.stdout.write(prompt)
     sys.stdout.flush()
     pw = []
     while True:
         cc = ord(getch())
-        if cc == 13:       # enter
+        if cc == 13:            # enter
             sys.stdout.write("\n")
             sys.stdout.flush()
             return "".join(pw)
@@ -62,9 +68,44 @@ def enter_password(prompt="P4ssword: ", mask=True):
             sys.stdout.flush()
             pw.append(chr(cc))
 
+# This is used when SETTING a password.
+# It fetches from env if present,
+# only does a single enter if masking is OFF,
+# and does the "enter twice" if masking is on.
+# Note: (because this is for setting, we can have the loop in here, unlike with getting, where the
+#        loop has to be synchronous with trying to decrypt the thing, so has to be in caller's code.)
 
+def get_double_enter_setting_password(prompt1, prompt2):
+    # --- Try password from environment variables ---
+    passw = get_env_password()
+    if passw:
+        return passw
+
+    # --- Get password from user once because showing the characters ---
+    if SHOW_VAR in os.environ:        # dont do an enter-re-enter if show pass is on
+        pass1 = get_enter_password(prompt1)
+        if not pass1:                             # user abort
+            return ""
+    else:
+        while True:
+            pass1 = get_enter_password(prompt1)
+            if not pass1:
+                return ""                        # user abort
+            pass2 = get_enter_password(prompt2)
+            if not pass2:
+                return ""                        # user abort
+
+            if pass1 == pass2:
+                return pass1
+            else:
+                print("Sorry, entered passwords do not match, please try again")
+                continue
+
+
+# Testing is fairly manual, for obj reasons, something like:
+# python -c "import getpassword ; print('Pass: ',getpassword.get_password('>: ', 'PASS_VAR', 'PASS_SHOW'))"
 
 if __name__ == '__main__':
-    pw = get_password()
+    pw = get_enter_password()
     print("Password got:  ",repr(pw))
 

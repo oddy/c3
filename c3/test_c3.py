@@ -1,6 +1,11 @@
 
-import pytest, base64, traceback, random
+import pytest, base64, traceback, random, os
 from pprint import pprint
+
+from six import int2byte
+
+import b3
+import b3.hexdump
 
 import c3main
 
@@ -18,6 +23,49 @@ import c3main
 def c3m():
     c3_obj = c3main.C3()
     return c3_obj
+
+
+# ======== Priv Key encrypt Tests ==================================================================
+
+# bare (not encrypted) key roundtrip
+def test_privkey_bare(c3m):
+    bare_priv = b"hello world"
+    priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv, bare=True)
+    #priv_block_bytes = priv_block_bytes[:25] + b"a" + priv_block_bytes[26:]
+    privd = c3m.load_priv_block(priv_block_bytes)
+    assert privd.privtype == c3main.PRIVTYPE_BARE
+    assert privd.keytype == c3main.KEYTYPE_ECDSA_256P
+    decrypted_priv = c3m.decrypt_private_key(privd)
+    assert decrypted_priv == bare_priv
+
+# encrypted key roundtrip using an environment variable password
+def test_privkey_env_var(c3m):
+    bare_priv = b"hello world"
+    os.environ["C3_PASSWORD"] = "Password01!"
+    priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv)
+    #priv_block_bytes = priv_block_bytes[:67] + b"a" + priv_block_bytes[68:]
+    privd = c3m.load_priv_block(priv_block_bytes)
+    assert privd.privtype == c3main.PRIVTYPE_PASS_PROTECT
+    assert privd.keytype == c3main.KEYTYPE_ECDSA_256P
+    decrypted_priv = c3m.decrypt_private_key(privd)
+    assert decrypted_priv == bare_priv
+
+# glitch a privkey byte to exercise the integrity check
+def test_privkey_bare_integrity(c3m):
+    bare_priv = b"hello world"
+    priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv, bare=True)
+    priv_block_bytes = priv_block_bytes[:16] + b"a" + priv_block_bytes[17:]
+    with pytest.raises(c3main.IntegrityError):
+        c3m.load_priv_block(priv_block_bytes)
+
+
+
+
+
+
+
+
+
 
 # ======== Verify Tests ============================================================================
 
@@ -106,7 +154,7 @@ def test_load_nulls(c3m):
 
 
 
-# ======== Sign Tests ============================================================================
+# ======== Sign Tests ==============================================================================
 
 #               |     no payload                  payload
 #  -------------+----------------------------------------------------------
@@ -283,6 +331,29 @@ def smallrandfuzz():
             pprint(z)
             return
 
+# glitch a byte in the privkey block processing to ensure the decode integrity checks dont fail
+
+def bare_glitch_loop():
+    c3m = c3main.C3()
+    bare_priv = b"hello world"
+    priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv, bare=True)
+
+    print("=== Known-good ===")
+    print(b3.hexdump.hexdump(priv_block_bytes))
+    pd = c3m.load_priv_block(priv_block_bytes)
+    pprint(pd)
+    print()
+
+    for i in range(len(priv_block_bytes)):
+        buf = priv_block_bytes[:i] + b"\x0f" + priv_block_bytes[i+1:]
+        try:
+            pd = c3m.load_priv_block(buf)
+            print(i, " - Success -")
+            #print(b3.hexdump.hexdump(buf))
+            #pprint(pd)
+            #print()
+        except Exception as e:
+            print(i, str(e))
 
 
 
@@ -290,7 +361,8 @@ def smallrandfuzz():
 if __name__ == '__main__':
     #truncmain()
     #glitchmain()
-    smallrandfuzz()
+    #smallrandfuzz()
+    bare_glitch_loop()
 
 
 
