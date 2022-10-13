@@ -37,12 +37,10 @@ def get_enter_password(prompt):
     if not sys.stdin.isatty():       # this assumes get_env_password has been called
         raise ValueError("Password can't be entered (%r environment variable can be used)" % PASS_VAR)
     else:
-        return enter_password(prompt, SHOW_VAR in os.environ)
+        return enter_password(prompt, SHOW_VAR not in os.environ)
 
 
-def enter_password(prompt="Password: ", dontmask=False):
-    if dontmask:
-        return six.moves.input(prompt)
+def enter_password(prompt="Password: ", mask=True):
     sys.stdout.write(prompt)
     sys.stdout.flush()
     pw = []
@@ -64,7 +62,10 @@ def enter_password(prompt="Password: ", dontmask=False):
         elif 0 <= cc <= 31:    # unprintables
             pass
         else:               # add to password
-            sys.stdout.write("*")
+            if mask:
+                sys.stdout.write("*")
+            else:
+                sys.stdout.write(chr(cc))
             sys.stdout.flush()
             pw.append(chr(cc))
 
@@ -84,8 +85,7 @@ def get_double_enter_setting_password(prompt1, prompt2):
     # --- Get password from user once because showing the characters ---
     if SHOW_VAR in os.environ:        # dont do an enter-re-enter if show pass is on
         pass1 = get_enter_password(prompt1)
-        if not pass1:                             # user abort
-            return ""
+        return pass1
     else:
         while True:
             pass1 = get_enter_password(prompt1)

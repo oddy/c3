@@ -188,10 +188,11 @@ class C3(object):
         if bare:                    # no encryption needed
             priv_bytes = bare_priv_bytes
         else:
-            prompt1 = "Private  key encryption password"
-            prompt2 = "Re-enter key encryption password"
+            prompt1 = "Private  key encryption password: "
+            prompt2 = "Re-enter key encryption password: "
             passw = getpassword.get_double_enter_setting_password(prompt1, prompt2)
             if not passw:
+                print("not passw for some reason")
                 return b""
             priv_bytes = self.pass_protect.SinglePassEncrypt(bare_priv_bytes, passw)
 

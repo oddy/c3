@@ -31,7 +31,6 @@ def c3m():
 def test_privkey_bare(c3m):
     bare_priv = b"hello world"
     priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv, bare=True)
-    #priv_block_bytes = priv_block_bytes[:25] + b"a" + priv_block_bytes[26:]
     privd = c3m.load_priv_block(priv_block_bytes)
     assert privd.privtype == c3main.PRIVTYPE_BARE
     assert privd.keytype == c3main.KEYTYPE_ECDSA_256P
@@ -43,7 +42,6 @@ def test_privkey_env_var(c3m):
     bare_priv = b"hello world"
     os.environ["C3_PASSWORD"] = "Password01!"
     priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv)
-    #priv_block_bytes = priv_block_bytes[:67] + b"a" + priv_block_bytes[68:]
     privd = c3m.load_priv_block(priv_block_bytes)
     assert privd.privtype == c3main.PRIVTYPE_PASS_PROTECT
     assert privd.keytype == c3main.KEYTYPE_ECDSA_256P
@@ -59,7 +57,22 @@ def test_privkey_bare_integrity(c3m):
         c3m.load_priv_block(priv_block_bytes)
 
 
-
+def interactive_password_test():        # note: not a pytest test
+    c3m = c3main.C3()
+    bare_priv = b"hello world"
+    print("- Encrypt & pack - ")
+    priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv)
+    if not priv_block_bytes:        # or exception?
+        print(" - user abort -")
+        return
+    print("- load & decrypt - ")
+    print(repr(priv_block_bytes))
+    pd = c3m.load_priv_block(priv_block_bytes)
+    de_priv = c3m.decrypt_private_key(pd)
+    if de_priv == bare_priv:
+        print("SUCCESS - roundtripped key matches original")
+    else:
+        print("FAIL - roundtripped key does not match original")
 
 
 
@@ -362,7 +375,8 @@ if __name__ == '__main__':
     #truncmain()
     #glitchmain()
     #smallrandfuzz()
-    bare_glitch_loop()
+    #bare_glitch_loop()
+    interactive_password_test()
 
 
 
