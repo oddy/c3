@@ -67,6 +67,7 @@ def interactive_password_test():        # note: not a pytest test
         return
     print("- load & decrypt - ")
     print(repr(priv_block_bytes))
+
     pd = c3m.load_priv_block(priv_block_bytes)
     de_priv = c3m.decrypt_private_key(pd)
     if de_priv == bare_priv:

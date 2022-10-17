@@ -7,14 +7,16 @@ from pprint import pprint
 import ecdsa
 import six
 
-import pwinput  # todo: for c3sign only. v1.0.2 vetted.
-
 import b3
-# ake b3 error when we field names wrong when schema_packing:
-b3.composite_schema.strict_mode = True
+b3.composite_schema.strict_mode = True  # helpful errors when packing wrong
 
 import getpassword
 import pass_protect     # todo: packagize
+
+# TODO TOMORROW:
+# integrate everything for commandline operations
+# expiry dates
+# do ascii fields
 
 
 # Todo: distribute Verify as it's own package/module.
@@ -66,7 +68,6 @@ KEYTYPE_ECDSA_256P = 1
 KNOWN_PRIVTYPES = [1,2]
 KNOWN_KEYTYPES = [1]
 
-
 KEY2NAME = {55 : "KEY_LIST_PAYLOAD", 66 : "KEY_LIST_SIGNER", 77 : "KEY_DAS", 88 : "KEY_PRIV_CRCWRAPPED"}
 
 # --- Errors ---
@@ -86,6 +87,137 @@ class ShortChainError(VerifyError):  # the next cert for verifying is missing of
     pass
 class UntrustedChainError(VerifyError):  # the chain ends with a self-sign we dont have in Trusted
     pass
+
+
+# ============ Command line ========================================================================
+
+
+# Caller has to write_files with combine false or true, depending.
+
+# if payload_or_cert:
+#     # signed-payload output
+#     out_public_with_hdr = b3.encode_item_joined(KEY_LIST_PAYLOAD, b3.LIST, out_public_part)
+#     self.write_files(name, out_public_with_hdr, b"", combine=False)  # wont write private_part if its empty
+# else:
+#     # signer (self or chain) output
+#     out_public_with_hdr = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, out_public_part)
+#     self.write_files(name, out_public_with_hdr, new_key_priv, combine=True)
+
+
+def UsageBail(msg=""):
+    help_txt = """
+    %s
+    Usage:    
+    TBD 
+
+    """ % (msg+"\n",)
+    print(help_txt)
+    sys.exit(1)
+
+
+def ArgvArgs():
+    args = AttrDict()
+    for arg in sys.argv:
+        z = re.match(r"^--(\w+)=(.+)$", arg)
+        if z:
+            k, v = z.groups()
+            args[k] = v
+    return args
+
+
+#               |     no payload             payload
+#  -------------+-------------------------------------------------
+#  using cert   |     make chain signer      sign payload
+#               |
+#  using self   |     make self signer       ERROR invalid state
+
+# make --name=fred --using==self --parts=combine
+# make --name=bob --using=fred --parts=split
+# sign --payload=FILE --using=bob  --outfile=FILE.signed
+
+# verify --file=FILE.signed
+
+
+
+def CommandlineMain():
+    if len(sys.argv) < 2:
+        UsageBail()
+    cmd = sys.argv[1].lower()
+    args = ArgvArgs()
+
+    c3m = C3()
+
+    # c3 make --name=root1 --using=self  --parts=split
+    # c3 make --name=inter1 --using=root1 --link=name --parts=combine
+
+    if cmd == "make":
+        if "using" not in args:
+            print("'make' needs --using=<name> or '--using=self', please supply")
+            return
+        if args.using == "self":
+            pub, priv = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name=args.name)
+        else:
+            upub, upriv = c3m.load_using(args.using)
+            if args.link == "append":
+                pub, priv = c3m.MakeSign(action=c3m.MAKE_INTERMEDIATE, name=args.name,
+                                         using_priv=upriv, using_pub=upub)
+            elif args.link == "name":
+                pub, priv = c3m.MakeSign(action=c3m.MAKE_INTERMEDIATE, name=args.name,
+                                         using_priv=upriv, using_name=args.using)
+            else:
+                print("please supply public-using --mode=append --mode=link")
+                return
+
+        bare = "nopassword" in args  # has to be --nopassword=blah for now.
+        if not bare:
+            print("Setting password on private key-")
+        epriv = c3m.make_encrypt_private_key_block(priv, bare=bare)
+        combine = True
+        if "parts" in args and args.parts == "split":
+            combine = False
+        c3m.write_files(args.name, pub, epriv, combine)
+        return
+
+
+    if cmd == "sign":
+        if "payload" not in args:
+            print("please supply --payload=<filename>")
+            return
+        payload_bytes = open(args.payload, "rb").read()
+
+        upub, upriv = c3m.load_using(args.using)
+        if args.link == "append":
+            pub, priv = c3m.MakeSign(action=c3m.SIGN_PAYLOAD, name=args.payload, payload=payload_bytes,
+                                     using_priv=upriv, using_pub=upub)
+        elif args.link == "name":
+            pub, priv = c3m.MakeSign(action=c3m.SIGN_PAYLOAD, name=args.payload, payload=payload_bytes,
+                                     using_priv=upriv, using_name=args.using)
+        else:
+            print("please supply public-using --link=append --link=name")
+            return
+
+        print("priv from makesign is ",repr(priv))
+        c3m.write_files(args.payload, pub, b"", combine=False)  # no private part, so no combine
+
+
+
+
+    if cmd == "verify":
+        public_part, _ = c3m.load_files(args.name)
+        ret = c3m.verify(c3m.load(public_part))
+        print("\n\nverify returns", repr(ret))
+        return
+
+    # if cmd == "fuzz":
+    #     FuzzEKH2()
+    #     return
+
+
+    UsageBail("Unknown command")
+
+
+
+# ===================== MAIN CLASS =================================================================
 
 
 class AttrDict(dict):
@@ -114,6 +246,24 @@ class C3(object):
                 continue
             self.trusted_certs[das.cert.name] = das.cert
         return
+
+    # ============ Load-using step =====================
+
+    def load_using(self, using_name):
+        upub, uepriv = self.load_files(using_name)
+        if not upub:
+            raise ValueError("No public part found for --using")
+        if not uepriv:
+            raise ValueError("No private part found for --using")
+        # todo: verify Using's pub? (would require the tool end to have a root pub cert
+        #       baked in and also a trust store of its own)
+        print("note: skipping verifying Using for now (requires tool root cert bake-in)")
+        ueprivd = self.load_priv_block(uepriv)
+        if ueprivd.privtype != PRIVTYPE_BARE:
+            print("Unlocking using's private key for use-")
+        upriv = self.decrypt_private_key(ueprivd)
+        # todo: ensure Using's priv key and pub key match?
+        return upub, upriv
 
     # ============ Private key decryption  =========================================================
 
@@ -503,7 +653,7 @@ class C3(object):
     # Note: incoming using_priv comes in bare, caller must decrypt.
     #       return var new_key_priv goes out bare, caller must encrypt.
 
-    def MakeSign(self, action, name="", payload="", using_priv=b"", using_pub=b"", using_name=""):          # todo: change using_name to bytes. Also change name to bytes.
+    def MakeSign(self, action, name="", payload=b"", using_priv=b"", using_pub=b"", using_name=""):          # todo: change using_name to bytes. Also change name to bytes.
         # if using Using, sanity-check using - enforce exclusive either-or
         if action in (self.MAKE_INTERMEDIATE, self.SIGN_PAYLOAD):
             if not using_name and not using_pub:
@@ -570,187 +720,12 @@ class C3(object):
 
 
 
-        # Caller has to write_files with combine false or true, depending.
-
-        # if payload_or_cert:
-        #     # signed-payload output
-        #     out_public_with_hdr = b3.encode_item_joined(KEY_LIST_PAYLOAD, b3.LIST, out_public_part)
-        #     self.write_files(name, out_public_with_hdr, b"", combine=False)  # wont write private_part if its empty
-        # else:
-        #     # signer (self or chain) output
-        #     out_public_with_hdr = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, out_public_part)
-        #     self.write_files(name, out_public_with_hdr, new_key_priv, combine=True)
 
 
 
 
 
 
-
-
-
-    # TODO TOMORROW:
-
-    # 1) make inter1 that asks for root1 by name, instead of having root1 tacked on.  [DONE TESTED]
-    # 2) make basic trust store, put root1 in it.   [DONE basic]
-    # 3) run verify with (1) and (2)                [DONE basic]
-    # 4) make test data root/inter/payload certs that exercise (1)(2)(3) scenarios.  [DONE TESTED]
-
-    # 5) make the error messages be nice for all of (4)  [DONE]
-    # 6) yield true and payload else raise exception with nice error message.   [payload vs commandline UX needs locking down]
-
-    # 7) it would be nice to get multisig in at this point?
-    # 8) make the code nice with classes and stuff, big clean up of the verify side  [DONE]
-    # 9) then big clean up of the sign/make side [DONE mostly]
-
-    # 10) TESTS
-
-    # AND THEN
-
-    # multi-signature   [NO]
-    # keytypes & libsodium & libsodium loading  [NO]
-    # passprotect porting to b3
-    # File saving, split/combine & ascii                [MOSTLY DONE]
-    # File loading, --using, split/combine & ascii      [MOSTLY DONE]
-    # signing expiry dates
-    # clean up commandline API and function call API
-    # list-signatures, multi cert seeking, building a chain, looping through a chain.  [MOSTLY DONE]
-    # Turning the chain into python data structure  [DONE]
-    # libsodium and how things are gonna have to be a class for libsodium, so it can load its DLL on startup. [NO]
-    # vetting the libsodium dlls with a hash. (we need this because then they vet everything else)  [NO]
-
-    # THEN
-
-    # 10) ascii fields
-    # 11) release!
-
-    # if root1 is self-signed we get here now and everything is happy
-    # BECAUSE, the loop doesn't try and access the next cert at the end and blow up like it did before
-    # and the loop gets to complete!
-
-
-
-
-
-# Step 1: make 'makesigner' command.  With self-sign.
-#         going with x=y argv structure for now, consider click later.
-
-# Step 2: make verify ?
-
-def CommandlineMain():
-    if len(sys.argv) < 2:
-        UsageBail()
-    cmd = sys.argv[1].lower()
-    args = ArgvArgs()
-
-    c3m = C3()
-    root1_b64 = """
-    2UKgAelNnAEJAUsZAQVyb290MQkCQDwdIh7DZkYyPcz+W2cBYozFZ38FanSeEHW9sSsZB+uyNiwr
-    etOgCKGUUzwULJVky5UOoZNaq/n79gpPhGhmVvAJAksJAUDuGhovJ49GsybchICpAa4iv1Z73T3B
-    03wZn9LWfqwY2PJ/uB0zjnkTt+n9kpiSdVctyyGq3/m3Doo/mzk9HI7wGQIFcm9vdDE=    
-    """
-    root1_block = base64.b64decode(root1_b64)
-    print("=======[ Verifying baked in root1 ]==========")
-    c3m.add_trusted_certs(root1_block)
-    print("=======[ Done Verifying baked in root1 ]==========")
-
-
-    root3_b64 = """
-    2UKgAelNnAEJAUsZAQVyb290MwkCQPtd9mb/53QGKK6TYFwluM9d1uRQBVMDC6eCQo//btLi1Ens
-    Mi7O3hL77kih8Q83GtHUhP8Mu7YGARqV6ecsUX8JAksJAUAQdmLTqWUKoOaMnvOHyoBZAQSk2Yhl
-    tCbtfzLEP0hn15424ybRC1AujqQ+NrnlmonvxVzWS1PxTOeZrNztYDqTGQIFcm9vdDM=  
-    """
-    root3_block = base64.b64decode(root3_b64)
-    print("=======[ Verifying baked in root3 ]==========")
-    c3m.add_trusted_certs(root3_block)
-    print("=======[ Done Verifying baked in root3 ]==========")
-
-
-
-
-    # todo: This should become --append or --link when we click-ify the commandline.
-    # if "sign" in cmd and ("mode" not in args or args.mode not in ("append", "link") and args.using != "self"):
-    #     print("please specify --mode=append or --mode=link")
-    #     print("       append - add using's public part to the payload cert chain")
-    #     print("       link   - add the NAME of using's public part to the payload cert chain")
-    #     UsageBail()
-
-
-    #               |     no payload             payload
-    #  -------------+-------------------------------------------------
-    #  using cert   |     make chain signer      sign payload
-    #               |
-    #  using self   |     make self signer       ERROR invalid state
-
-    if cmd != "verify":
-        using_name = args.using
-        name = args.name
-    #
-    # if cmd == "makesignerselfsigned":
-    #
-    #     c3m.MakeSign(False, name, "self")
-    #     # c3m.MakeSignerSelfSigned(args)
-    #     return
-    #
-    # if cmd == "makesignerusingsignerappended":
-    #     c3m.MakeSign(False, name, using_name)
-    #     #c3m.MakeSignerUsingSignerAppended(args)
-    #     return
-    #
-    # # if cmd == "makesignerusingsignerbyname":
-    # #     c3m.MakeSignerUsingSignerByName(args)
-    # #     return
-    #
-    #
-    # if cmd == "signpayload":
-    #     c3m.MakeSign(True, name, using_name)
-    #     #c3m.SignPayload(args)
-    #     return
-
-
-    if cmd == "verify":
-        public_part, _ = c3m.load_files(args.name)
-        ret = c3m.verify(c3m.load(public_part))
-        print("\n\nverify returns", repr(ret))
-        return
-
-    # if cmd == "fuzz":
-    #     FuzzEKH2()
-    #     return
-
-
-    UsageBail("Unknown command")
-
-
-# Policy: names are short and become the filename. They can go in the cert too.
-#         Skip IDs for now.
-
-# File input output
-# --using name or NAME  (check environ if upper case)
-
-# --output combined or --output split
-
-# print(len(base64.encodebytes(b"a"*500).decode().splitlines()[0]))    = 76
-
-
-def UsageBail(msg=""):
-    help_txt = """
-    %s
-    Usage:    
-    c3main makesigner --using=self --output=split --name=cert1 --expiry=2025-05-05
-    """ % (msg+"\n",)
-    print(help_txt)
-    sys.exit(1)
-
-
-def ArgvArgs():
-    args = AttrDict()
-    for arg in sys.argv:
-        z = re.match(r"^--(\w+)=(.+)$", arg)
-        if z:
-            k, v = z.groups()
-            args[k] = v
-    return args
 
 
 if __name__ == "__main__":
