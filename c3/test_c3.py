@@ -1,5 +1,5 @@
 
-import pytest, base64, traceback, random, os
+import pytest, base64, traceback, random, os, datetime
 from pprint import pprint
 
 from six import int2byte
@@ -167,6 +167,85 @@ def test_load_nulls(c3m):
         c3m.load(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
 
+# ======== Friendly Fields Tests ===================================================================
+
+harry = """
+2UKnAelNowEJAVIZAQVoYXJyeQkCQKHYrXjZmLo3skE6TR2ZccUJI3e8u0xOevZ7fKlCrf5FOfEL
+SohZvpFdl/NhRmEQ0PUDKTWWniezRTzY+XNGwtqpAwQTCswfCQJLCQFAmWyVXVTpUiqqsQRELQMb
+naGDoEku+ttgIP10s+wchUvO4NJgqSlYJU+AyuoLz8+JIsv0JRt4YrA7QtY4XU0ZqhkCBWhhcnJ5
+"""
+
+def test_make_friendly_fields(c3m):
+    print("\n\n")
+    public_part = base64.b64decode(harry)
+    lines_str = c3m.make_friendly_fields(public_part, c3main.CERT_SCHEMA, ["name", "expiry"])
+    # print(repr(lines_str))
+    assert lines_str == '[ Name   ]  harry\n[ Expiry ]  19 October 2022'
+
+# "[ Fruit Basket ]  Hello there narnaman"
+
+# Friendly fields checks
+
+# busted vertical structure
+# broken secure block
+# bad FF field line format
+# FF name not in secure block
+# type not convertable
+# error converting convertable type
+# field value does not match
+
+
+
+
+
+root1_text_public_part = """
+--------------------[ root1 - Payload & Public Certs ]----------------------
+[ Name   ]  root1
+[ Expiry ]  10 October 2022
+2UKgAelNnAEJAUsZAQVyb290MQkCQDwdIh7DZkYyPcz+W2cBYozFZ38FanSeEHW9sSsZB+uyNiwr
+etOgCKGUUzwULJVky5UOoZNaq/n79gpPhGhmVvAJAksJAUDuGhovJ49GsybchICpAa4iv1Z73T3B
+03wZn9LWfqwY2PJ/uB0zjnkTt+n9kpiSdVctyyGq3/m3Doo/mzk9HI7wGQIFcm9vdDE=
+
+lkjlkj
+"""
+
+# This one has a glitch in the middle of its base64.
+root2_text_public_part = """s
+--------------------[ root1 - Payload & Public Certs ]----------------------
+[ Name    ]  root1
+[ Issued  ]  4:30pm, 23 March 2021
+2UKgAelNnAEJAUsZAQVyb290MQkCQDwdIh7DZkYyPcz+W2cBYozFZ38FanSeEHW9sSsZB+uyNiwr
+etOgCKGUUzwULJVky5UOoZNaq/n79gpPhGhmVvAJAksJAZDuGhovJ49GsybchICpAa4iv1Z73T3B
+03wZn9LWfqwY2PJ/uB0zjnkTt+n9kpiSdVctyyGq3/m3Doo/mzk9HI7wGQIFcm9vdDE==
+
+lkjlkj
+"""
+
+root3_text_public_part = """
+--------------------[ root1 - Payload & Public Certs ]----------------------
+[ Name   ]  root1
+[ Public Key ]  None
+2UKgAelNnAEJAUsZAQVyb290MQkCQDwdIh7DZkYyPcz+W2cBYozFZ38FanSeEHW9sSsZB+uyNiwr
+etOgCKGUUzwULJVky5UOoZNaq/n79gpPhGhmVvAJAksJAZDuGhovJ49GsybchICpAa4iv1Z73T3B
+03wZn9LWfqwY2PJ/uB0zjnkTt+n9kpiSdVctyyGq3/m3Doo/mzk9HI7wGQIFcm9vdDE==
+
+lkjlkj
+"""
+
+# harry2 has expiry of 19 october 2022 in the secure block.
+harry2 = """
+--------------------[ harry - Payload & Public Certs ]----------------------
+[ Name   ]  harry
+[ Expiry ]  19 october 2022
+2UKnAelNowEJAVIZAQVoYXJyeQkCQKHYrXjZmLo3skE6TR2ZccUJI3e8u0xOevZ7fKlCrf5FOfEL
+SohZvpFdl/NhRmEQ0PUDKTWWniezRTzY+XNGwtqpAwQTCswfCQJLCQFAmWyVXVTpUiqqsQRELQMb
+naGDoEku+ttgIP10s+wchUvO4NJgqSlYJU+AyuoLz8+JIsv0JRt4YrA7QtY4XU0ZqhkCBWhhcnJ5
+"""
+
+
+def test_check_friendly_fields(c3m):
+    c3m.check_friendly_fields(root2_text_public_part, c3main.CERT_SCHEMA)
+
 
 # ======== Sign Tests ==============================================================================
 
@@ -186,6 +265,7 @@ def test_load_nulls(c3m):
 
 def test_make_selfsigned(c3m):
     # make a selfsigned then verify it and check the cert name == the sig name
+    expiry = datetime.datetime.now()
     pub_part_bytes, priv_part_bytes = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name="test1")
     c3m.add_trusted_certs(pub_part_bytes)
 
@@ -387,7 +467,7 @@ if __name__ == '__main__':
 #     for i in range(0,255):
 #         buf = six.int2byte(i) #+ b"\x0f\x55\x55"
 #         try:
-#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, buf, 0)
+#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, buf, 0)
 #             print("%4i %02x - SUCCESS - key = %r" % (i,i, ppkey))
 #         except Exception as e:
 #             print("%4i %02x -  %s" % (i,i, e))
@@ -400,7 +480,7 @@ if __name__ == '__main__':
 #         i += 1
 #         buf = random.randbytes(20)
 #         try:
-#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, buf, 0)
+#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, buf, 0)
 #             out = "SUCCESS - key = %r" % ppkey
 #         except Exception as e:
 #             out = "%r" % e

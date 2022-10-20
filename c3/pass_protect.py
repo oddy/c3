@@ -8,8 +8,6 @@ from b3 import encode_uvarint, decode_uvarint
 # WE are payload agnostic - dont care about key_types etc - all that stuff is the Caller's problem
 # We're stealing most of this from qsafiles socrypt.
 
-# todo: an integrity test prior to decrypting.
-# todo: when we switch to b3
 
 # Binary format: [salt sz][xpayload sz][salt][num-passes][xpayload][xpayload][xpayload]...
 

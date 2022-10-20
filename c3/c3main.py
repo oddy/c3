@@ -1,7 +1,7 @@
 
 from __future__ import print_function
 
-import sys, re, base64, os, traceback, random, binascii
+import sys, re, base64, os, traceback, random, binascii, textwrap, functools, datetime
 from pprint import pprint
 
 import ecdsa
@@ -14,20 +14,23 @@ import getpassword
 import pass_protect     # todo: packagize
 
 # TODO TOMORROW:
-# integrate everything for commandline operations
+# integrate everything for commandline operations  [DONE]
 # expiry dates
+# cross check priv key with pub key on using load
 # do ascii fields
-
-
-# Todo: distribute Verify as it's own package/module.
-#       b/c passprotect depends on e.g pathlib2, sodium, etc.
+# name-vs-id bytes. (even make name bytes and skip IDs for now maybe).
+#                   "in the old version, the id WAS the name"
+# put the keytype in the sig.
+# -------------------------------
+# release as beta.
+# dont distribute verify seperately, and dont distribute a libsodium dll yet.
 
 # --- Public structure stuff ---
 
 # tag/key values (mostly for sanity checking)
 # level0
 KEY_LIST_PAYLOAD = 55  # cert chain with a payload as the first entry
-KEY_LIST_SIGNER = 66   # cert chain with a cert as the first entry
+KEY_LIST_CERTS = 66   # cert chain with a cert as the first entry
 # level1
 KEY_DAS = 77
 # Policy: we are NOT doing multi-sig DAS now. Too hard.
@@ -38,8 +41,8 @@ KEY_PRIV_CRCWRAPPED = 88       # "priv data with a crc32 integrity check"
 
 CERT_SCHEMA = (
     (b3.UTF8,  "name",  1, True),
-    (b3.BYTES, "pub_key", 2, True),
-    # (b3.SCHED, "expiry", 3),
+    (b3.BYTES, "public_key", 2, True),
+    (b3.BASICDATE, "expiry", 3, False),     # todo: make mandatory, respin all test data
     )
 
 SIG_SCHEMA = (
@@ -68,7 +71,7 @@ KEYTYPE_ECDSA_256P = 1
 KNOWN_PRIVTYPES = [1,2]
 KNOWN_KEYTYPES = [1]
 
-KEY2NAME = {55 : "KEY_LIST_PAYLOAD", 66 : "KEY_LIST_SIGNER", 77 : "KEY_DAS", 88 : "KEY_PRIV_CRCWRAPPED"}
+KEY2NAME = {55 : "KEY_LIST_PAYLOAD", 66 : "KEY_LIST_CERTS", 77 : "KEY_DAS", 88 : "KEY_PRIV_CRCWRAPPED"}
 
 # --- Errors ---
 class C3Error(ValueError):
@@ -87,21 +90,12 @@ class ShortChainError(VerifyError):  # the next cert for verifying is missing of
     pass
 class UntrustedChainError(VerifyError):  # the chain ends with a self-sign we dont have in Trusted
     pass
+class TamperError(VerifyError):     # Friendly Fields are present in the textual file, but don't match up with the secure fields
+    pass
 
 
 # ============ Command line ========================================================================
 
-
-# Caller has to write_files with combine false or true, depending.
-
-# if payload_or_cert:
-#     # signed-payload output
-#     out_public_with_hdr = b3.encode_item_joined(KEY_LIST_PAYLOAD, b3.LIST, out_public_part)
-#     self.write_files(name, out_public_with_hdr, b"", combine=False)  # wont write private_part if its empty
-# else:
-#     # signer (self or chain) output
-#     out_public_with_hdr = b3.encode_item_joined(KEY_LIST_SIGNER, b3.LIST, out_public_part)
-#     self.write_files(name, out_public_with_hdr, new_key_priv, combine=True)
 
 
 def UsageBail(msg=""):
@@ -147,8 +141,8 @@ def CommandlineMain():
 
     c3m = C3()
 
-    # c3 make --name=root1 --using=self  --parts=split
-    # c3 make --name=inter1 --using=root1 --link=name --parts=combine
+    # python c3main.py  make --name=root1 --using=self  --parts=split
+    # python c3main.py  make --name=inter1 --using=root1 --link=name --parts=combine
 
     if cmd == "make":
         if "using" not in args:
@@ -178,6 +172,7 @@ def CommandlineMain():
         c3m.write_files(args.name, pub, epriv, combine)
         return
 
+    # python c3main.py  sign --payload=payload.txt --link=append  --using=inter1
 
     if cmd == "sign":
         if "payload" not in args:
@@ -199,18 +194,19 @@ def CommandlineMain():
         print("priv from makesign is ",repr(priv))
         c3m.write_files(args.payload, pub, b"", combine=False)  # no private part, so no combine
 
-
-
+    # python c3main.py  verify --name=payload.txt --trusted=root1
 
     if cmd == "verify":
+        if "trusted" in args:
+            print("Loading trusted cert ",args.trusted)
+            tr_pub, _ = c3m.load_files(args.trusted)
+            print("tr_pub is ",repr(tr_pub))
+            c3m.add_trusted_certs(tr_pub)
+
         public_part, _ = c3m.load_files(args.name)
         ret = c3m.verify(c3m.load(public_part))
         print("\n\nverify returns", repr(ret))
         return
-
-    # if cmd == "fuzz":
-    #     FuzzEKH2()
-    #     return
 
 
     UsageBail("Unknown command")
@@ -363,10 +359,8 @@ class C3(object):
 
     def load(self, public_part):
         # The public part should have an initial header that indicates whether the first das is a payload or a cert
-        ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_SIGNER], b3.LIST, public_part, 0)
+        ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
         public_part = public_part[index:]               # chop off the header
-        if not public_part:
-            raise StructureError("Missing cert chain / payload")
 
         # Should be a list of DAS structures, so pythonize the list
         das_list = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)
@@ -374,7 +368,7 @@ class C3(object):
         # unpack the certs & sigs in das_list
         for i, das in enumerate(das_list):
             # dont unpack cert if this is the first das and ppkey is PAYLOAD
-            if i > 0 or ppkey == KEY_LIST_SIGNER:
+            if i > 0 or ppkey == KEY_LIST_CERTS:
                 das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_bytes))
                 self.schema_assert_mandatory_fields_truthy(CERT_SCHEMA, das.cert)
 
@@ -422,7 +416,7 @@ class C3(object):
 
             # --- Actually verify the signature ---
             try:
-                VK = ecdsa.VerifyingKey.from_string(next_cert.pub_key, ecdsa.NIST256p)
+                VK = ecdsa.VerifyingKey.from_string(next_cert.public_key, ecdsa.NIST256p)
                 VK.verify(das.sig.sig_val, das.data_bytes)  # returns True or raises exception
             except Exception as e:       # wrap theirs with our own error class
                 raise InvalidSignatureError(self.ctnm(das)+"Signature failed to verify")
@@ -463,7 +457,7 @@ class C3(object):
             if not has_data or data_len == 0:
                 raise StructureError("List item header invalid - no data")
 
-            das_bytes = b3.item.decode_value(data_type, has_data, is_null, data_len, buf, index)
+            das_bytes = b3.item.decode_value(data_type, has_data, is_null, data_len, buf, index)  # fixme: should be b3.decode_value
 
             if len(das_bytes) == 0:
                 raise StructureError("List item data is missing")
@@ -495,7 +489,7 @@ class C3(object):
         if not buf:
             raise StructureError("No data - buffer is empty or None")
         try:
-            key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)
+            key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)  #fixme: should be b3.decode_header
         except (IndexError, UnicodeDecodeError):
             raise StructureError("Header structure is invalid")  # from None
             # raise .. from None disables py3's chaining (cleaner unhandled prints) but isnt legal py2
@@ -505,6 +499,8 @@ class C3(object):
             raise StructureError("Incorrect type in header - wanted %r got %r" % (want_type, data_type))
         if not has_data:
             raise StructureError("Invalid header - no has_data")
+        if index == len(buf):
+            raise StructureError("No data after header - buffer is empty")
         return key, index
 
 
@@ -525,11 +521,16 @@ class C3(object):
         line += "-"*(76-len(line))
         return line
 
+    def a85bytes(self, buf):
+        return '\n'.join(textwrap.wrap(base64.a85encode(buf).decode(), 76))
+        # ^^ not used, it looks scary and doesn't actually reduce the number of lines in blocks.
+
     def write_files(self, name, public_part, private_part=b"", combine=True, desc=""):
         pub_desc = desc if desc else (name + " - Payload & Public Certs")
         priv_desc = (desc or name) + " - PRIVATE Key"
         pub_str = self.asc_header(pub_desc) + "\n" + base64.encodebytes(public_part).decode()
         priv_str = self.asc_header(priv_desc) + "\n" + base64.encodebytes(private_part).decode()
+
         print()
         print(pub_str)
         print()
@@ -613,9 +614,141 @@ class C3(object):
 
         return pub_block, priv_block
 
+    # ============================== Friendly Fields ===============================================
+
+    # In: public_part bytes, schema for first dict, field names to output in friendly format
+    # Out: field names & values as text lines
+    # Note: this doesn't exception, it best-efforts with print warnings b/c intended commandline use.
+
+    def make_friendly_fields(self, public_part, schema, friendly_field_names):
+        # --- get to that first dict ---
+        # Assume standard pub_bytes structure (das_list with header)
+        try:
+            ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
+            public_part = public_part[index:]
+            das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
+            dx0 = AttrDict(b3.schema_unpack(schema, das0.data_bytes))
+        except Exception as e:
+            print("Skipping making friendly fields - error parsing cert/payload:\n   "+str(e))
+            return ""
+        found_something = False
+
+        # --- Cross-check whether wanted fields exist (and map names to types) ---
+        # This is because we're doing this with payloads as well as certs
+        # The rest of the C3 system is fully payload-agnostic but we aren't.
+        types_by_name = {}
+        for typ, name in [i[:2] for i in schema]:
+            if name in dx0 and name in friendly_field_names:
+                types_by_name[name] = typ
+        if not types_by_name:
+            print("Skipping making friendly fields - no applicable fields found")
+            return ""
+
+        # --- Convert wanted fields to a textual representation where possible ---
+        # order by the friendly_field_names parameter
+        line_items = []
+        for name in friendly_field_names:
+            if name not in types_by_name:
+                continue
+            fname = name.title().replace("_"," ")
+            typ = types_by_name[name]
+            val = dx0[name]     # in
+            fval = ""   # out
+            # --- Value converters ---
+            if typ in (b3.BYTES, b3.LIST, b3.DICT, 11, 12):  # cant be str-converted
+                print("  !!! Visible field '%s' cannot be text-converted (type %s), skipping" % (name, b3.b3_type_name(typ)))
+                continue
+            elif typ == b3.SCHED:
+                fval = "%s, %s" % (val.strftime("%-I:%M%p").lower(), val.strftime("%-d %B %Y"))
+            elif typ == b3.BASICDATE:
+                fval = val.strftime("%-d %B %Y")
+            else:
+                fval = str(val)
+            line_items.append((fname, fval))
+
+        # --- Make stuff line up nicely ---
+        longest_name_len = functools.reduce(max, [len(i[0]) for i in line_items], 0)
+        lines = ["[ %s ]  %s" % (str.ljust(fname, longest_name_len), fval) for fname,fval in line_items]
+        return '\n'.join(lines)
 
 
-    # ============================== Signing =======================================================
+    # Note: unlike make_friendly_fields, we raise exceptions when something is wrong
+    # In: text with friendly-fields lines, followed by the base64 of the public part.
+    # Out: exceptions or True.
+    # We're pretty strict compared to make, any deviations at all will raise an exception.
+    # This includes spurious fields, etc.
+
+    # We expect there to be an empty line (or end of file) after the base64 block, and NOT more stuff.
+    # More stuff immediately after the base64 block is an error.
+
+
+    def check_friendly_fields(self, text_public_part, schema):
+        types_by_name = {i[1]: i[0] for i in schema}
+        # --- Ensure vertical structure is legit ---
+        # 1 or no header line (-), immediately followed by 0 or more FF lines ([),
+        # immediately followd by base64 then only whitespace or eof.
+        lines = text_public_part.splitlines()
+        c0s = ''.join([line[0] if line else ' ' for line in lines])+' '
+        X = re.match(r"^ *(-?)(\[*)([a-z-A-Z0-9/=+]+) ", c0s)
+        if not X:
+            raise StructureError("Public part text structure is invalid")
+        ff_lines = lines[X.start(2) : X.end(2)]    # extract FF lines
+        b64_lines = lines[X.start(3) : X.end(3)]   # extract base64 lines
+        b64_block = ''.join(b64_lines)
+        public_part = base64.b64decode(b64_block)
+
+        # --- get to that first dict in the secure block ---
+        # Assume standard pub_bytes structure (das_list with header)
+        # Let these just exception out.
+        ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
+        public_part = public_part[index:]
+        das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
+        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_bytes))
+
+        # --- Cross-check each Friendy Field line ---
+        for ff in ff_lines:
+            # --- Extract friendly name & value ---
+            fX = re.match(r"^\[ (.*) ]  (.*)$",ff)
+            if not fX:
+                raise TamperError("Invalid format for visible field line %r" % ff[:32])
+            fname, fval = fX.groups()
+
+            # --- convert name ---
+            # spaces aren't allowed in code schema field names because AttrDict, only underscores so
+            # 1:1 conversion back is easy.
+            name = fname.strip().lower().replace(" ","_")
+            fval = fval.strip()     # some converters are finicky about trailing spaces
+
+            # --- Check name presence ---
+            if name not in types_by_name:
+                raise TamperError("Visible field '%s' is not present in the secure area" % (name,))
+            typ = types_by_name[name]
+
+            # --- convert value ---
+            if typ == b3.UTF8:
+                val = str(fval)              # actually the incoming text should already be utf8 anyway
+            elif typ == b3.UVARINT:
+                val = int(fval)
+            elif typ == b3.BOOL:
+                val = bool(fval.lower().strip() == "True")
+            elif typ == b3.SCHED:
+                val = "%s, %s" % (val.strftime("%-I:%M%p").lower(), val.strftime("%-d %B %Y"))
+            elif typ == b3.BASICDATE:
+                val = datetime.datetime.strptime(fval, "%d %B %Y").date()
+            else:
+                raise TamperError("Visible field '%s' cannot be type-converted" % (name,))
+
+            # --- Compare value ---
+            if name not in dx0:         # could happen if field is optional in the schema
+                raise TamperError("Visible field '%s' is not present in the secure area" % (name,))
+            secure_val = dx0[name]
+            if secure_val != val:
+                raise TamperError("Field '%s' visible value %r does not match secure value %r" % (name, val, secure_val))
+        return True  # success
+
+
+
+        # ============================== Signing =======================================================
 
     #               |     no payload             payload
     #  -------------+-------------------------------------------------
@@ -669,7 +802,8 @@ class C3(object):
             new_key_priv, new_key_pub = self.GenKeysECDSANist256p()
 
             # make pub cert for pub key
-            new_pub_cert = AttrDict(name=name, pub_key=new_key_pub)
+            expooo = datetime.date.today()
+            new_pub_cert = AttrDict(name=name, public_key=new_key_pub, expiry=expooo)  # fixme: expiry
             new_pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, new_pub_cert)
             payload_bytes = new_pub_cert_bytes
         # --- Load payload if not key-genning ---
@@ -702,7 +836,8 @@ class C3(object):
             # we need to:
             # 1) strip using_public_part's public_part header,
             # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
-            _, index = self.expect_key_header([KEY_LIST_SIGNER], b3.LIST, using_pub, 0)
+            # (we should test this)
+            _, index = self.expect_key_header([KEY_LIST_CERTS], b3.LIST, using_pub, 0)
             using_pub = using_pub[index:]
             # 2) concat our data + using_public_part's data
             out_public_part = das_bytes_with_hdr + using_pub
@@ -713,7 +848,7 @@ class C3(object):
         if action == self.SIGN_PAYLOAD:
             key_type = KEY_LIST_PAYLOAD
         else:
-            key_type = KEY_LIST_SIGNER
+            key_type = KEY_LIST_CERTS
         out_public_with_hdr = b3.encode_item_joined(key_type, b3.LIST, out_public_part)
 
         return out_public_with_hdr, new_key_priv
