@@ -2,8 +2,6 @@
 import pytest, base64, traceback, random, os, datetime
 from pprint import pprint
 
-from six import int2byte
-
 import b3
 import b3.hexdump
 

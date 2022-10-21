@@ -14,62 +14,103 @@ import getpassword
 import pass_protect     # todo: packagize
 
 # TODO TOMORROW:
-# integrate everything for commandline operations  [DONE]
-# expiry dates
-# cross check priv key with pub key on using load
-# do ascii fields
-# name-vs-id bytes. (even make name bytes and skip IDs for now maybe).
-#                   "in the old version, the id WAS the name"
-# put the keytype in the sig.
+
+# We need a diagram of how the functions flow, and the various entry points.
+
+# Be as janky with this stuff as we want, we're not doing a public release, just making the UX not suck for us.
+# this means click is out, --nopassword=yes is ok.
+
+
+# * fix the new field names in the code.
+# * get expiry dates and expiry handling in.
+#   - rebuild the test data with the new field names.
+
+# * integrate check_friendly's vertical validation with load_files loader.
+#   - make sure binary blocks is still the gateway point.
+#   - integrate it with the private part loader too (already happens via load_files i think)
+
+# * have verify return a nice chain along with the payload if any.
+
+
+# * integrate make_friendly at commandline level or save_files level
+#   - its a files thing not a bytes thing so.
+#   - so e.g. licensing can have its own friendly fields.
+
+# * [DONT] integrate load_using into MakeSign
+#   - tho we've been keeping them seperate so that upriv and upub can be a bytes-gateway.
+#   - because MakeSign operates bytes in bytes out, which we need for e.g. acmd operation.
+
+# * the update b3 fixmes
+
+# * cross check priv key with pub key on using load?
+#   - gonna go with requiring the public part for Using even if link=name
+#   - OR skip the cross check and issue a warning.
+
+# * Break the code up into bytes operations (c3main.C3) and files stuff (load/save & friendlies)
+#   - password soliciting might be in the middle, that's ok.
+#   - It would be nice to very briefly document the bytes API so we have a solid lock on the gateway boundary.
+
+# Clean up password prompts and commandline UX
+
+# * fix up commandline handling - do this in conjunction with the Licensing use case.
+#   - this is about the API functions too.
+#   - which we need the Licensing use case for anyway.
+
 # -------------------------------
 # release as beta.
 # dont distribute verify seperately, and dont distribute a libsodium dll yet.
 
+
+
 # --- Public structure stuff ---
 
-# tag/key values (mostly for sanity checking)
-# level0
+# Tag/Key values
+# Public-part top level
 KEY_LIST_PAYLOAD = 55  # cert chain with a payload as the first entry
 KEY_LIST_CERTS = 66   # cert chain with a cert as the first entry
-# level1
+# Public-part chain-level
 KEY_DAS = 77
-# Policy: we are NOT doing multi-sig DAS now. Too hard.
-# Note: in future if multi-signature support is wanted, we can add new tag/key values to indicate
-#       the different data-and-[list of signatures] structure.
-
+# Private-part top level
 KEY_PRIV_CRCWRAPPED = 88       # "priv data with a crc32 integrity check"
+# Private-part field types
+PRIVTYPE_BARE = 1
+PRIVTYPE_PASS_PROTECT = 2
+KEYTYPE_ECDSA_256P = 1      # this may include hashers (tho may include hashtype later?)
+KNOWN_PRIVTYPES = [1, 2]
+KNOWN_KEYTYPES = [1]
+
+# --- Data structures ---
 
 CERT_SCHEMA = (
-    (b3.UTF8,  "name",  1, True),
-    (b3.BYTES, "public_key", 2, True),
-    (b3.BASICDATE, "expiry", 3, False),     # todo: make mandatory, respin all test data
-    )
+    # (b3.UTF8,  "name",  1, True),      # name becomes cert_id (we can still use e.g "root1" for testing.)
+    (b3.BYTES,     "cert_id",       0, True),
+    (b3.UTF8,      "subject_name",  1, True),
+    (b3.UVARINT,   "key_type",      2, True),
+    (b3.BYTES,     "public_key",    3, True),
+    (b3.BASICDATE, "expiry_date",   4, True),
+    (b3.BASICDATE, "issued_date",   5, True),
+)
 
 SIG_SCHEMA = (
-    (b3.BYTES, "sig_val", 1,  True),
-    (b3.UTF8, "issuer_name", 2, False),  # value can be empty. todo: want this to be This is bytes for IDs.
+    (b3.BYTES, "signature", 0,  True),
+    (b3.BYTES, "signing_cert_id", 1, False),  # value can be empty.
 )
 
 DATA_AND_SIG = (
-    (b3.BYTES, "data_bytes", 1, True),
-    (b3.BYTES, "sig_bytes", 2, True),
+    (b3.BYTES, "data_part", 0, True),  # a cert (CERT_SCHEMA) or a payload (BYTES)
+    (b3.BYTES, "sig_part", 1, True),   # a SIG_SCHEMA
+    # (We could put a sig_list item here later if we want to go chain multi sig.)
 )
 
 # --- Private structure stuff ---
 
 PRIV_CRCWRAPPED = (
-    (b3.UVARINT, "privtype", 1, True),      # protection method (e.g. bare/none, or pass_protect)
-    (b3.UVARINT, "keytype",  2, True),      # actual type of private key (e.g. ecdsa 256p)
-    (b3.BYTES,   "privdata", 3, True),
-    (b3.UVARINT, "crc32",    4, True),      # crc of privdata for integrity check
+    (b3.UVARINT, "priv_type", 0, True),      # protection method (e.g. bare/none, or pass_protect)
+    (b3.UVARINT, "key_type",  1, True),      # actual type of private key (e.g. ecdsa 256p)
+    (b3.BYTES,   "priv_data", 2, True),
+    (b3.UVARINT, "crc32",    3, True),       # crc of privdata for integrity check
 )
 
-# Add more of these as we get more key types and/or more encryption mechanisms
-PRIVTYPE_BARE = 1
-PRIVTYPE_PASS_PROTECT = 2
-KEYTYPE_ECDSA_256P = 1
-KNOWN_PRIVTYPES = [1,2]
-KNOWN_KEYTYPES = [1]
 
 KEY2NAME = {55 : "KEY_LIST_PAYLOAD", 66 : "KEY_LIST_CERTS", 77 : "KEY_DAS", 88 : "KEY_PRIV_CRCWRAPPED"}
 
@@ -90,8 +131,8 @@ class ShortChainError(VerifyError):  # the next cert for verifying is missing of
     pass
 class UntrustedChainError(VerifyError):  # the chain ends with a self-sign we dont have in Trusted
     pass
-class TamperError(VerifyError):     # Friendly Fields are present in the textual file, but don't match up with the secure fields
-    pass
+class TamperError(VerifyError):     # Friendly Fields are present in the textual file,
+    pass             #   but don't match up with the secure fields
 
 
 # ============ Command line ========================================================================
@@ -125,13 +166,6 @@ def ArgvArgs():
 #               |
 #  using self   |     make self signer       ERROR invalid state
 
-# make --name=fred --using==self --parts=combine
-# make --name=bob --using=fred --parts=split
-# sign --payload=FILE --using=bob  --outfile=FILE.signed
-
-# verify --file=FILE.signed
-
-
 
 def CommandlineMain():
     if len(sys.argv) < 2:
@@ -151,6 +185,11 @@ def CommandlineMain():
         if args.using == "self":
             pub, priv = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name=args.name)
         else:
+            # one call to MakeSign with  using=<name> and append=true or false?
+            # you have to load_using anyway, but upriv can be missing.
+
+            # verify uses --trusted NOT --using, so we COULD integrate load_using into MakeSign.
+
             upub, upriv = c3m.load_using(args.using)
             if args.link == "append":
                 pub, priv = c3m.MakeSign(action=c3m.MAKE_INTERMEDIATE, name=args.name,
@@ -263,11 +302,8 @@ class C3(object):
 
     # ============ Private key decryption  =========================================================
 
-    # policy: how to use:
-    #         # self.MakeSign( blah blah using_priv=self.yield_private_key(self.load_priv_block(self.LoadFiles(name).priv_block))
-
     # in: block bytes from e.g. LoadFiles
-    # out: keytype, privtype, shucked privbytes
+    # out: private key + metadata dict
     # sanity & crc32 check the priv block, then shuck it and return the inner data.
     # caller goes ok if privtype is pass_protect use pass_protect to decrypt the block etc.
 
@@ -286,19 +322,16 @@ class C3(object):
             raise IntegrityError("Private key block failed data integrity check (crc32)")
         return privd
 
-
     # Has a "get password from user" loop
     # here is where we would demux different private protection methods also.
     # - currently we just have Bare and pass_protect
-
-    # Todo: do we want this to return blank, or exception?
 
     def decrypt_private_key(self, privd):
         if privd.privtype == PRIVTYPE_BARE:
             return privd.privdata
         if privd.privtype != PRIVTYPE_PASS_PROTECT:
             raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.privtype, KNOWN_PRIVTYPES))
-        if self.pass_protect.DualPasswordsNeeded(privd.privdata):  # todo: allow for dual passwords
+        if self.pass_protect.DualPasswordsNeeded(privd.privdata):  # todo: we dont support this here yet
             raise NotImplementedError("Private key wants dual passwords")
 
         # --- Try password from environment variables ---
@@ -315,8 +348,6 @@ class C3(object):
             passw = getpassword.get_enter_password(prompt)
             if not passw:
                 raise ValueError("No password supplied, exiting")
-                # print("No password supplied, exiting")
-                # break
 
             try:
                 priv_ret = self.pass_protect.SinglePassDecrypt(privd.privdata, passw)
@@ -385,12 +416,13 @@ class C3(object):
         else:
             return " (payload) "
 
-    # Apart from actual signature fails, there are 3 ways for this to fail:
-    # 1) "fell off" - unnamed issuer cert and no next cert in line
-    # 2) Cant Find Named Cert - in the cert store / trust store / certs_by_name etc
-    # 3) Last cert is self-signed and verified OK but isn't in the trust store.
+    # Apart from actual signature fails, there are 3 other ways for this to fail:
+    # 1) unnamed issuer cert and no next cert in line aka "fell off the end" (ShortChainError)
+    # 2) Named cert not found - in the cert store / trust store / certs_by_name etc
+    # 3) Last cert is self-signed and verifies OK but isn't in the trust store. (Untrusted Chain)
 
-    # verify() = Data-And-Sigs items list -> payload bytes or an Exception
+    # In: Data-And-Sigs items list
+    # Out: payload bytes or an Exception
 
     def verify(self, das_list):
         certs_by_name = {das.cert.name : das.cert for das in das_list if "cert" in das}
@@ -506,12 +538,9 @@ class C3(object):
 
     # ============================== File Saving/Loading ===========================================
 
-    # Policy: b3 header for "whole of private_part" and "whole of public_part" happens at our CALLER'S level
-    #         validation that "this block of bytes is in fact the private part" happens there too.
     # Policy: look for name.PRIVATE and name.PUBLIC (.b64.txt)
     # Policy: split trumps combined.
     # Policy: Return "" for private_part if there is none, callers can validate
-
 
     def asc_header(self, msg):
         m2 = "[ %s ]" % msg
@@ -521,9 +550,6 @@ class C3(object):
         line += "-"*(76-len(line))
         return line
 
-    def a85bytes(self, buf):
-        return '\n'.join(textwrap.wrap(base64.a85encode(buf).decode(), 76))
-        # ^^ not used, it looks scary and doesn't actually reduce the number of lines in blocks.
 
     def write_files(self, name, public_part, private_part=b"", combine=True, desc=""):
         pub_desc = desc if desc else (name + " - Payload & Public Certs")
@@ -681,7 +707,6 @@ class C3(object):
     # We expect there to be an empty line (or end of file) after the base64 block, and NOT more stuff.
     # More stuff immediately after the base64 block is an error.
 
-
     def check_friendly_fields(self, text_public_part, schema):
         types_by_name = {i[1]: i[0] for i in schema}
         # --- Ensure vertical structure is legit ---
@@ -748,21 +773,13 @@ class C3(object):
 
 
 
-        # ============================== Signing =======================================================
+    # ============================== Signing =======================================================
 
     #               |     no payload             payload
     #  -------------+-------------------------------------------------
     #  using cert   |     make chain signer      sign payload
     #               |
     #  using self   |     make self signer       ERROR invalid state
-
-    # load_files()  single or combined files ->  public_part bytes and private_part bytes maybe
-    # load() = public_part bytes -> list of Data-And-Sigs items.
-    # verify() = Data-And-Sigs items list -> payload bytes or an Exception
-
-    # write_files()  public_part bytes and private_part bytes maybe -> single or combined files
-
-    # save()  list of data-and-sigs items   ?   ->   public_part bytes
 
     # The way sign combines things, we get bytes out.
     # Cannot be seperated like load and verify are, nor do we want to.
@@ -786,7 +803,8 @@ class C3(object):
     # Note: incoming using_priv comes in bare, caller must decrypt.
     #       return var new_key_priv goes out bare, caller must encrypt.
 
-    def MakeSign(self, action, name="", payload=b"", using_priv=b"", using_pub=b"", using_name=""):          # todo: change using_name to bytes. Also change name to bytes.
+    def MakeSign(self, action, name="", payload=b"", using_priv=b"", using_pub=b"", using_name=""):
+        # todo: change using_name to bytes. Also change name to bytes.
         # if using Using, sanity-check using - enforce exclusive either-or
         if action in (self.MAKE_INTERMEDIATE, self.SIGN_PAYLOAD):
             if not using_name and not using_pub:
@@ -852,14 +870,6 @@ class C3(object):
         out_public_with_hdr = b3.encode_item_joined(key_type, b3.LIST, out_public_part)
 
         return out_public_with_hdr, new_key_priv
-
-
-
-
-
-
-
-
 
 
 
