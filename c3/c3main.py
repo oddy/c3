@@ -292,7 +292,7 @@ class C3(object):
         for das in cert_das_list:
             if "cert" not in das:         # skip payload if there is one
                 continue
-            self.trusted_certs[das.cert.name] = das.cert
+            self.trusted_certs[das.cert.cert_id] = das.cert
         return
 
     # ============ Load-using step =====================
@@ -413,10 +413,10 @@ class C3(object):
         for i, das in enumerate(das_list):
             # dont unpack cert if this is the first das and ppkey is PAYLOAD
             if i > 0 or ppkey == KEY_LIST_CERTS:
-                das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_bytes))
+                das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_part))
                 self.schema_assert_mandatory_fields_truthy(CERT_SCHEMA, das.cert)
 
-            das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_bytes))
+            das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_part))
             self.schema_assert_mandatory_fields_truthy(SIG_SCHEMA, das.sig)
 
         return das_list
@@ -438,31 +438,31 @@ class C3(object):
     # Out: payload bytes or an Exception
 
     def verify(self, das_list):
-        certs_by_name = {das.cert.name : das.cert for das in das_list if "cert" in das}
+        certs_by_id = {das.cert.cert_id : das.cert for das in das_list if "cert" in das}
         found_in_trusted = False         # whether we have established a link to the trusted_certs
 
         for i, das in enumerate(das_list):
-            issuer_name = das.sig.issuer_name
+            signing_cert_id = das.sig.signing_cert_id
             # --- Find the 'next cert' ie the one which verifies our signature ---
-            if not issuer_name:
-                # --- no name means "next cert in the chain" ---
+            if not signing_cert_id:
+                # --- no signing-id means "next cert in the chain" ---
                 if i + 1 >= len(das_list):      # have we fallen off the end?
                     raise ShortChainError(self.ctnm(das)+"Next issuer cert is missing")
                 next_cert = das_list[i + 1].cert
             else:
                 # --- got a name, look in trusted for it, then in ourself (self-signed) ---
-                if issuer_name in self.trusted_certs:
-                    next_cert = self.trusted_certs[issuer_name]
+                if signing_cert_id in self.trusted_certs:
+                    next_cert = self.trusted_certs[signing_cert_id]
                     found_in_trusted = True
-                elif issuer_name in certs_by_name:
-                    next_cert = certs_by_name[issuer_name]
+                elif signing_cert_id in certs_by_id:
+                    next_cert = certs_by_id[signing_cert_id]
                 else:
-                    raise CertNotFoundError(self.ctnm(das)+"wanted cert %r not found" % issuer_name)
+                    raise CertNotFoundError(self.ctnm(das)+"wanted cert %r not found" % signing_cert_id)
 
             # --- Actually verify the signature ---
             try:
                 VK = ecdsa.VerifyingKey.from_string(next_cert.public_key, ecdsa.NIST256p)
-                VK.verify(das.sig.sig_val, das.data_bytes)  # returns True or raises exception
+                VK.verify(das.sig.signature, das.data_part)  # returns True or raises exception
             except Exception as e:       # wrap theirs with our own error class
                 raise InvalidSignatureError(self.ctnm(das)+"Signature failed to verify")
             # --- Now do next das in line ---
