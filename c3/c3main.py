@@ -20,6 +20,14 @@ import pass_protect     # todo: packagize
 # Be as janky with this stuff as we want, we're not doing a public release, just making the UX not suck for us.
 # this means click is out, --nopassword=yes is ok.
 
+# how to square names & ids with the commandline handling?
+# !!! we call the ID "root1" and commingle that with the filename. !!!
+# !!! and duplicate that to subject name. and keep --name for the command line. !!!
+# !!! this is good enough for our immediate needs i believe. !!!
+# !!! park the ulid generation but leave the commented out code for later. !!!
+# this fulfils janky while also giving us future proofed ID-ing and allows mandatory subject naming.
+
+
 
 # * fix the new field names in the code.
 # * get expiry dates and expiry handling in.
@@ -82,7 +90,6 @@ KNOWN_KEYTYPES = [1]
 # --- Data structures ---
 
 CERT_SCHEMA = (
-    # (b3.UTF8,  "name",  1, True),      # name becomes cert_id (we can still use e.g "root1" for testing.)
     (b3.BYTES,     "cert_id",       0, True),
     (b3.UTF8,      "subject_name",  1, True),
     (b3.UVARINT,   "key_type",      2, True),
@@ -166,6 +173,11 @@ def ArgvArgs():
 #               |
 #  using self   |     make self signer       ERROR invalid state
 
+def ParseExpiryDate(exp_str):
+    exp_d = datetime.datetime.strptime(exp_str, "%Y-%m-%d").date()
+    # Put some intelligent regex matches here so we can decode a few of the most common date formats
+    # yes we need this.
+    return exp_d
 
 def CommandlineMain():
     if len(sys.argv) < 2:
@@ -182,8 +194,9 @@ def CommandlineMain():
         if "using" not in args:
             print("'make' needs --using=<name> or '--using=self', please supply")
             return
+        expiry = ParseExpiryDate(args.expiry)
         if args.using == "self":
-            pub, priv = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name=args.name)
+            pub, priv = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name=args.name, expiry=expiry)
         else:
             # one call to MakeSign with  using=<name> and append=true or false?
             # you have to load_using anyway, but upriv can be missing.
@@ -193,10 +206,10 @@ def CommandlineMain():
             upub, upriv = c3m.load_using(args.using)
             if args.link == "append":
                 pub, priv = c3m.MakeSign(action=c3m.MAKE_INTERMEDIATE, name=args.name,
-                                         using_priv=upriv, using_pub=upub)
+                                         using_priv=upriv, using_pub=upub, expiry=expiry)
             elif args.link == "name":
                 pub, priv = c3m.MakeSign(action=c3m.MAKE_INTERMEDIATE, name=args.name,
-                                         using_priv=upriv, using_name=args.using)
+                                         using_priv=upriv, using_name=args.using, expiry=expiry)
             else:
                 print("please supply public-using --mode=append --mode=link")
                 return
@@ -374,10 +387,10 @@ class C3(object):
             priv_bytes = self.pass_protect.SinglePassEncrypt(bare_priv_bytes, passw)
 
         privd = AttrDict()
-        privd["keytype"] = KEYTYPE_ECDSA_256P
-        privd["privtype"] = PRIVTYPE_BARE if bare else PRIVTYPE_PASS_PROTECT
-        privd["privdata"] = priv_bytes
-        privd["crc32"] = binascii.crc32(privd.privdata, 0) % (1 << 32)
+        privd["key_type"] = KEYTYPE_ECDSA_256P
+        privd["priv_type"] = PRIVTYPE_BARE if bare else PRIVTYPE_PASS_PROTECT
+        privd["priv_data"] = priv_bytes
+        privd["crc32"] = binascii.crc32(privd.priv_data, 0) % (1 << 32)
         out_bytes = b3.schema_pack(PRIV_CRCWRAPPED, privd)
         out_bytes_with_hdr = b3.encode_item_joined(KEY_PRIV_CRCWRAPPED, b3.DICT, out_bytes)
         return out_bytes_with_hdr
@@ -643,20 +656,15 @@ class C3(object):
     # ============================== Friendly Fields ===============================================
 
     # In: public_part bytes, schema for first dict, field names to output in friendly format
-    # Out: field names & values as text lines
-    # Note: this doesn't exception, it best-efforts with print warnings b/c intended commandline use.
+    # Out: field names & values as text lines (or exceptions)
 
     def make_friendly_fields(self, public_part, schema, friendly_field_names):
         # --- get to that first dict ---
         # Assume standard pub_bytes structure (das_list with header)
-        try:
-            ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
-            public_part = public_part[index:]
-            das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
-            dx0 = AttrDict(b3.schema_unpack(schema, das0.data_bytes))
-        except Exception as e:
-            print("Skipping making friendly fields - error parsing cert/payload:\n   "+str(e))
-            return ""
+        ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
+        public_part = public_part[index:]
+        das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
+        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_bytes))
         found_something = False
 
         # --- Cross-check whether wanted fields exist (and map names to types) ---
@@ -667,8 +675,8 @@ class C3(object):
             if name in dx0 and name in friendly_field_names:
                 types_by_name[name] = typ
         if not types_by_name:
-            print("Skipping making friendly fields - no applicable fields found")
-            return ""
+            raise ValueError("No wanted friendly fields found in the secure block")
+            # note: should this just be a warning & continue?
 
         # --- Convert wanted fields to a textual representation where possible ---
         # order by the friendly_field_names parameter
@@ -682,8 +690,7 @@ class C3(object):
             fval = ""   # out
             # --- Value converters ---
             if typ in (b3.BYTES, b3.LIST, b3.DICT, 11, 12):  # cant be str-converted
-                print("  !!! Visible field '%s' cannot be text-converted (type %s), skipping" % (name, b3.b3_type_name(typ)))
-                continue
+                raise TypeError("Visible field '%s' cannot be text-converted (type %s), skipping" % (name, b3.b3_type_name(typ)))
             elif typ == b3.SCHED:
                 fval = "%s, %s" % (val.strftime("%-I:%M%p").lower(), val.strftime("%-d %B %Y"))
             elif typ == b3.BASICDATE:
@@ -803,25 +810,33 @@ class C3(object):
     # Note: incoming using_priv comes in bare, caller must decrypt.
     #       return var new_key_priv goes out bare, caller must encrypt.
 
-    def MakeSign(self, action, name="", payload=b"", using_priv=b"", using_pub=b"", using_name=""):
-        # todo: change using_name to bytes. Also change name to bytes.
+    def MakeSign(self, action, name="", payload=b"", using_priv=b"", using_pub=b"", using_name="", expiry=None):
         # if using Using, sanity-check using - enforce exclusive either-or
         if action in (self.MAKE_INTERMEDIATE, self.SIGN_PAYLOAD):
             if not using_name and not using_pub:
                 raise ValueError("both using_name and using_pub are empty, please select one")
             if using_name and using_pub:
                 raise ValueError("both using_name and using_pub have values, please select one")
+        # sanity check expiry, needed for selfsign and intermediate
+        if action in (self.MAKE_INTERMEDIATE, self.MAKE_SELFSIGNED):
+            if not expiry:
+                raise ValueError("creating cert: please provide expiry date")
 
+        cert_id = name.encode("ascii")  # Note: dupe of name for now. Can be ULID in future.
+        using_id = using_name.encode("ascii")  # Note: dupe of name, maybe ULID later, etc.
         new_key_priv = None
 
         # --- Key gen if applicable ---
         if action in (self.MAKE_SELFSIGNED, self.MAKE_INTERMEDIATE):
             # make keys
             new_key_priv, new_key_pub = self.GenKeysECDSANist256p()
-
             # make pub cert for pub key
-            expooo = datetime.date.today()
-            new_pub_cert = AttrDict(name=name, public_key=new_key_pub, expiry=expooo)  # fixme: expiry
+
+            today = datetime.date.today()
+            new_pub_cert = AttrDict(
+                public_key=new_key_pub, subject_name=name, cert_id=cert_id, issued_date=today,
+                key_type=KEYTYPE_ECDSA_256P, expiry_date=expiry
+            )
             new_pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, new_pub_cert)
             payload_bytes = new_pub_cert_bytes
         # --- Load payload if not key-genning ---
@@ -832,18 +847,18 @@ class C3(object):
         if action == self.MAKE_SELFSIGNED:
             # self-sign it, make sig
             SK = ecdsa.SigningKey.from_string(new_key_priv, ecdsa.NIST256p)
-            sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name=name)  # note byname
+            sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=cert_id)  # note byname
             sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
         # --- Sign the thing (cert or payload) using Using, if not selfsign ----
         else:
             SK = ecdsa.SigningKey.from_string(using_priv, ecdsa.NIST256p)
-            sig_d = AttrDict(sig_val=SK.sign(payload_bytes), issuer_name=using_name)
-            # note  ^^^ issuer_name can be blank, in which case using_pub should have bytes to append
+            sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=using_id)
+            # note  ^^^ signing_cert_id can be blank, in which case using_pub should have bytes to append
             sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
 
         # --- Make data-and-sig structure ---
-        das = AttrDict(data_bytes=payload_bytes, sig_bytes=sig_bytes)
+        das = AttrDict(data_part=payload_bytes, sig_part=sig_bytes)
         das_bytes = b3.schema_pack(DATA_AND_SIG, das)
 
         # --- prepend header for das itself so straight concatenation makes a list-of-das ---

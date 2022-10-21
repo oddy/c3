@@ -174,7 +174,6 @@ naGDoEku+ttgIP10s+wchUvO4NJgqSlYJU+AyuoLz8+JIsv0JRt4YrA7QtY4XU0ZqhkCBWhhcnJ5
 """
 
 def test_make_friendly_fields(c3m):
-    print("\n\n")
     public_part = base64.b64decode(harry)
     lines_str = c3m.make_friendly_fields(public_part, c3main.CERT_SCHEMA, ["name", "expiry"])
     # print(repr(lines_str))
