@@ -30,8 +30,8 @@ def test_privkey_bare(c3m):
     bare_priv = b"hello world"
     priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv, bare=True)
     privd = c3m.load_priv_block(priv_block_bytes)
-    assert privd.privtype == c3main.PRIVTYPE_BARE
-    assert privd.keytype == c3main.KEYTYPE_ECDSA_256P
+    assert privd.priv_type == c3main.PRIVTYPE_BARE
+    assert privd.key_type == c3main.KEYTYPE_ECDSA_256P
     decrypted_priv = c3m.decrypt_private_key(privd)
     assert decrypted_priv == bare_priv
 
@@ -41,8 +41,8 @@ def test_privkey_env_var(c3m):
     os.environ["C3_PASSWORD"] = "Password01!"
     priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv)
     privd = c3m.load_priv_block(priv_block_bytes)
-    assert privd.privtype == c3main.PRIVTYPE_PASS_PROTECT
-    assert privd.keytype == c3main.KEYTYPE_ECDSA_256P
+    assert privd.priv_type == c3main.PRIVTYPE_PASS_PROTECT
+    assert privd.key_type == c3main.KEYTYPE_ECDSA_256P
     decrypted_priv = c3m.decrypt_private_key(privd)
     assert decrypted_priv == bare_priv
 
@@ -81,26 +81,35 @@ def interactive_password_test():        # note: not a pytest test
 
 # ======== Verify Tests ============================================================================
 
+# Made with:  python c3main.py make --name="root1" --using=self --expiry=2022-09-09
 root1 = """
-2UKgAelNnAEJAUsZAQVyb290MQkCQDwdIh7DZkYyPcz+W2cBYozFZ38FanSeEHW9sSsZB+uyNiwr
-etOgCKGUUzwULJVky5UOoZNaq/n79gpPhGhmVvAJAksJAUDuGhovJ49GsybchICpAa4iv1Z73T3B
-03wZn9LWfqwY2PJ/uB0zjnkTt+n9kpiSdVctyyGq3/m3Doo/mzk9HI7wGQIFcm9vdDE=
+2UK6AelNtgEJAGUJAAVyb290MRkBBXJvb3QxOQIBAQkDQMg/+gyc/F3JZs4rY6ya5d9cPdWd6Sjs
+OD3UsENAitTCGrY0fceRKrndJKyXsVwOhwe2lUpmidVytXzAundMMWmpBAQJCcwfqQUEFgrMHwkB
+SwkAQOe/rz9mLoBLLRCpFEr+emsHEvcH73vZislzpwqBHxD+tV23QFmTMjsJzKsPOQmmYOxMkH/U
+EbKFB4gzSK0aT/EJAQVyb290MQ==
 """
 root1_block = base64.b64decode(root1)
 
 plaintext_payload = b"Hello this is the actual payload\n"
 
-payload_and_chain_wanted_name_root1 = """
-2TeQAulNbAkBIUhlbGxvIHRoaXMgaXMgdGhlIGFjdHVhbCBwYXlsb2FkCgkCRQkBQMRZbYZVUowg
-EJXqQpu2TiMFdHjkhKtiYSzLzQrcBkMR5LkPdvNfkxOVIp96EensA6FpkXIk+Lr2LCRE/SDF6/sV
-AulNnQEJAUwZAQZpbnRlcjMJAkAbE6h1BD8t7d+K2f4tnag0Q6NNlx8MLWWMZKE4aKe3WY9Ilu5W
-L+EWWq13xGDUyOp3OK4QhbkS0+1Iw2TswTchCQJLCQFAGJE1krY0/RjkNtp0ETrMr2Kko8Dz+/1s
-0axfU2jfwBGf5HkSagtkfWNTDkdBDTShKvQq2qwHeBdhsLHs8jDTthkCBXJvb3Qx"""
-public_part = base64.b64decode(payload_and_chain_wanted_name_root1)
+payload_and_inter2_wanted_name_root1 = """
+2TerAulNbAkAIUhlbGxvIHRoaXMgaXMgdGhlIGFjdHVhbCBwYXlsb2FkCgkBRQkAQH510LkxZEZJ
+Az8n/j0GRhSdyrnvudPhZ08GXUkltKZUIP2cMiNfQhiuLDvgbVho5zJZVrIrdSQEJU0xbYsZLWIB
+AelNuAEJAGcJAAZpbnRlcjIZAQZpbnRlcjI5AgEBCQNAJnKBsUN6eOud943dJotzVG5RJtxCBfMr
+ZUb7lPv9c1dxoMEFWQHBdotULByW1RtZkCZNE5pAx3Ll3gOyBD4keakEBBcJzB+pBQQWCswfCQFL
+CQBA2w6v9I6uaICQ5V1d4R8Tsui/pLq45V2Rg7jNx1mypYXHDaQzpvrCbf/lR2Z9OgpTH8vmBafy
+DYlgh26lpIO5HAkBBXJvb3Qx
+"""
+public_part = base64.b64decode(payload_and_inter2_wanted_name_root1)
+
+def test_add_trusted_root1(c3m):
+    c3m.add_trusted_certs(root1_block)
+
 
 # Happy path
 def test_verify_success_ext_root1(c3m):
     c3m.add_trusted_certs(root1_block)
+    chain = c3m.load(public_part)
     ret = c3m.verify(c3m.load(public_part))
     assert ret == plaintext_payload
 
@@ -134,14 +143,16 @@ def test_verify_cert_not_found_error(c3m):
 
 
 payload_and_chain_with_root_selfsigned_included = """
-2TeqA+lNbAkBIUhlbGxvIHRoaXMgaXMgdGhlIGFjdHVhbCBwYXlsb2FkCgkCRQkBQFlmCSMzBHj3
-HWLE1wyBPqBPVG7JQZfFShkqkcOCtEjee/Ym75Lnrrv49/QMk3y0TZ382HybAnoKXwBFlF5IkhsV
-AulNlwEJAUwZAQZpbnRlcjcJAkAMX0xJJzbctIHyOhMqPBELJY5akzaVcplupxywc0WrR1RISwEe
-z2JRLbcHMc3/fepsPtDCr4IRB0VXEq7PXVQuCQJFCQFAj4cmxJWQB2ecnpAscrvRXPHTuqjOlRh0
-GIn7+PNEDtDcOYJ7LL/HxQ/V4twpiWBwE/KHKDCMVMeWXHisQsENDBUC6U2cAQkBSxkBBXJvb3Qy
-CQJAdOodJNyKdMdsa+ujdomof7CfdNuYd9DjnxnLQObPQdrTx1qS7bopuhNrGkHqrIaSnx+SllM0
-5ZJH0zSwTNqiBwkCSwkBQDTSV4tAi1DpIBP98lY1QMoLdAUtjaUa0PwtB/wvQZEyiXYcMA/FCw2g
-WSHT72yY49AFS5dQ13v4538RaTD6c5wZAgVyb290Mg=="""
+2TffA+lNbAkAIUhlbGxvIHRoaXMgaXMgdGhlIGFjdHVhbCBwYXlsb2FkCgkBRQkAQEm0pCEzDFCz
+ZQ30w/HbGOXAO+VA9h/EzUdE1lZCqpOnRF3yDwjyXukQvUP8nAhBN7u/gRzy0lkS80BqjpFQ74kB
+AelNsgEJAGcJAAZpbnRlcjMZAQZpbnRlcjM5AgEBCQNAYL5PIvF/unXMHSQrqtmdYxMS0R2gv5mg
+AdViuQxCA8mTU2hlvqLrdlNuFFxNdOQ77z03EOwpyJMeD3TJ8kJM0akEBBcJzB+pBQQWCswfCQFF
+CQBAgKHkaHcq4cDgpVhOccTOqouUKCZtF9gbaAESuHu2E7Oyj0rjXBVTiiBqw9zsOi8Gw7JiGWwJ
+TiyR0qThWHHowQEB6U22AQkAZQkABXJvb3QxGQEFcm9vdDE5AgEBCQNAyD/6DJz8XclmzitjrJrl
+31w91Z3pKOw4PdSwQ0CK1MIatjR9x5Equd0krJexXA6HB7aVSmaJ1XK1fMC6d0wxaakEBAkJzB+p
+BQQWCswfCQFLCQBA57+vP2YugEstEKkUSv56awcS9wfve9mKyXOnCoEfEP61XbdAWZMyOwnMqw85
+CaZg7EyQf9QRsoUHiDNIrRpP8QkBBXJvb3Qx
+"""
 
 # a fully valid chain with a selfsign at the end, should still fail with UntrustedChainError
 def test_verify_untrusted_chain(c3m):
@@ -167,81 +178,59 @@ def test_load_nulls(c3m):
 
 # ======== Friendly Fields Tests ===================================================================
 
-harry = """
-2UKnAelNowEJAVIZAQVoYXJyeQkCQKHYrXjZmLo3skE6TR2ZccUJI3e8u0xOevZ7fKlCrf5FOfEL
-SohZvpFdl/NhRmEQ0PUDKTWWniezRTzY+XNGwtqpAwQTCswfCQJLCQFAmWyVXVTpUiqqsQRELQMb
-naGDoEku+ttgIP10s+wchUvO4NJgqSlYJU+AyuoLz8+JIsv0JRt4YrA7QtY4XU0ZqhkCBWhhcnJ5
-"""
 
 def test_make_friendly_fields(c3m):
-    public_part = base64.b64decode(harry)
-    lines_str = c3m.make_friendly_fields(public_part, c3main.CERT_SCHEMA, ["name", "expiry"])
+    pub_part = base64.b64decode(root1)
+    lines_str = c3m.make_friendly_fields(pub_part, c3main.CERT_SCHEMA, ["subject_name", "expiry_date"])
     # print(repr(lines_str))
-    assert lines_str == '[ Name   ]  harry\n[ Expiry ]  19 October 2022'
-
-# "[ Fruit Basket ]  Hello there narnaman"
-
-# Friendly fields checks
-
-# busted vertical structure
-# broken secure block
-# bad FF field line format
-# FF name not in secure block
-# type not convertable
-# error converting convertable type
-# field value does not match
+    assert lines_str == '[ Subject Name ]  root1\n[ Expiry Date  ]  9 September 2022'
 
 
 
-
-
-root1_text_public_part = """
+root1_pub_text = """
 --------------------[ root1 - Payload & Public Certs ]----------------------
-[ Name   ]  root1
-[ Expiry ]  10 October 2022
-2UKgAelNnAEJAUsZAQVyb290MQkCQDwdIh7DZkYyPcz+W2cBYozFZ38FanSeEHW9sSsZB+uyNiwr
-etOgCKGUUzwULJVky5UOoZNaq/n79gpPhGhmVvAJAksJAUDuGhovJ49GsybchICpAa4iv1Z73T3B
-03wZn9LWfqwY2PJ/uB0zjnkTt+n9kpiSdVctyyGq3/m3Doo/mzk9HI7wGQIFcm9vdDE=
+[ Subject Name ]  root1
+[ Expiry Date  ]  9 September 2022
+2UK6AelNtgEJAGUJAAVyb290MRkBBXJvb3QxOQIBAQkDQMg/+gyc/F3JZs4rY6ya5d9cPdWd6Sjs
+OD3UsENAitTCGrY0fceRKrndJKyXsVwOhwe2lUpmidVytXzAundMMWmpBAQJCcwfqQUEFgrMHwkB
+SwkAQOe/rz9mLoBLLRCpFEr+emsHEvcH73vZislzpwqBHxD+tV23QFmTMjsJzKsPOQmmYOxMkH/U
+EbKFB4gzSK0aT/EJAQVyb290MQ==
 
-lkjlkj
+this_part_should_be_ignored
 """
 
-# This one has a glitch in the middle of its base64.
-root2_text_public_part = """s
---------------------[ root1 - Payload & Public Certs ]----------------------
-[ Name    ]  root1
-[ Issued  ]  4:30pm, 23 March 2021
-2UKgAelNnAEJAUsZAQVyb290MQkCQDwdIh7DZkYyPcz+W2cBYozFZ38FanSeEHW9sSsZB+uyNiwr
-etOgCKGUUzwULJVky5UOoZNaq/n79gpPhGhmVvAJAksJAZDuGhovJ49GsybchICpAa4iv1Z73T3B
-03wZn9LWfqwY2PJ/uB0zjnkTt+n9kpiSdVctyyGq3/m3Doo/mzk9HI7wGQIFcm9vdDE==
+def test_ff_check_happy_path(c3m):
+    ret = c3m.check_friendly_fields(root1_pub_text, c3main.CERT_SCHEMA)
+    assert ret == True
 
-lkjlkj
-"""
+def test_ff_busted_vertical_1(c3m):
+    busted_vertical_structure = "\n\n".join(root1_pub_text.splitlines())
+    with pytest.raises(c3main.StructureError, match="structure is invalid"):
+        c3m.check_friendly_fields(busted_vertical_structure, c3main.CERT_SCHEMA)
 
-root3_text_public_part = """
---------------------[ root1 - Payload & Public Certs ]----------------------
-[ Name   ]  root1
-[ Public Key ]  None
-2UKgAelNnAEJAUsZAQVyb290MQkCQDwdIh7DZkYyPcz+W2cBYozFZ38FanSeEHW9sSsZB+uyNiwr
-etOgCKGUUzwULJVky5UOoZNaq/n79gpPhGhmVvAJAksJAZDuGhovJ49GsybchICpAa4iv1Z73T3B
-03wZn9LWfqwY2PJ/uB0zjnkTt+n9kpiSdVctyyGq3/m3Doo/mzk9HI7wGQIFcm9vdDE==
+def test_ff_bad_field(c3m):
+    bad_ff = root1_pub_text.replace("Date  ]", "Date]")
+    with pytest.raises(c3main.TamperError, match="format for visible"):
+        c3m.check_friendly_fields(bad_ff, c3main.CERT_SCHEMA)
 
-lkjlkj
-"""
+def test_ff_spurious_field(c3m):
+    spurious_field = "[ Spurious Field ]  Hello world"
+    bad_ff = root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
+    with pytest.raises(c3main.TamperError, match="not present in the secure area"):
+        c3m.check_friendly_fields(bad_ff, c3main.CERT_SCHEMA)
 
-# harry2 has expiry of 19 october 2022 in the secure block.
-harry2 = """
---------------------[ harry - Payload & Public Certs ]----------------------
-[ Name   ]  harry
-[ Expiry ]  19 october 2022
-2UKnAelNowEJAVIZAQVoYXJyeQkCQKHYrXjZmLo3skE6TR2ZccUJI3e8u0xOevZ7fKlCrf5FOfEL
-SohZvpFdl/NhRmEQ0PUDKTWWniezRTzY+XNGwtqpAwQTCswfCQJLCQFAmWyVXVTpUiqqsQRELQMb
-naGDoEku+ttgIP10s+wchUvO4NJgqSlYJU+AyuoLz8+JIsv0JRt4YrA7QtY4XU0ZqhkCBWhhcnJ5
-"""
+def test_ff_field_value_mismatch(c3m):
+    spurious_field = "[ Subject Name ]  Harold"
+    bad_ff = root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
+    with pytest.raises(c3main.TamperError, match="does not match secure"):
+        c3m.check_friendly_fields(bad_ff, c3main.CERT_SCHEMA)
 
 
-def test_check_friendly_fields(c3m):
-    c3m.check_friendly_fields(root2_text_public_part, c3main.CERT_SCHEMA)
+
+# todo: friendly fields tests.
+
+
+
 
 
 # ======== Sign Tests ==============================================================================
@@ -262,14 +251,15 @@ def test_check_friendly_fields(c3m):
 
 def test_make_selfsigned(c3m):
     # make a selfsigned then verify it and check the cert name == the sig name
-    expiry = datetime.datetime.now()
-    pub_part_bytes, priv_part_bytes = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name="test1")
+    expiry = datetime.date(2022, 9, 9)
+
+    pub_part_bytes, priv_part_bytes = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name="test1", expiry=expiry)
     c3m.add_trusted_certs(pub_part_bytes)
 
     chain = c3m.load(pub_part_bytes)
     ret = c3m.verify(chain)
     assert ret is True      # no payload, successful verify
-    assert chain[0].cert.name == chain[0].sig.issuer_name    # self-signed
+    assert chain[0].cert.cert_id == chain[0].sig.signing_cert_id    # self-signed
 
 
 def test_make_supply_neither_inval(c3m):
@@ -280,15 +270,16 @@ def test_make_supply_neither_inval(c3m):
 def test_make_supply_both_inval(c3m):
     with pytest.raises(ValueError):
         inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=b"a", using_name="root9")
-        # Note it doen't get to needing the missing using_priv
+        # Note it doen't get to needing the missing using_priv or expiry
 
 
 def test_make_inter_name(c3m):
+    expir = datetime.date(2022, 9, 9)
     # Root cert
-    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9")
+    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
     c3m.add_trusted_certs(root_pub)
 
-    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_name="root9", using_priv=root_priv)
+    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_name="root9", using_priv=root_priv, expiry=expir)
 
     chain = c3m.load(inter_pub)
     ret = c3m.verify(chain)
@@ -296,11 +287,12 @@ def test_make_inter_name(c3m):
 
 
 def test_make_inter_append(c3m):
+    expir = datetime.date(2022, 9, 9)
     # Root cert
-    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9")
+    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
     c3m.add_trusted_certs(root_pub)
 
-    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_priv=root_priv)
+    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_priv=root_priv, expiry=expir)
 
     chain = c3m.load(inter_pub)
     ret = c3m.verify(chain)
@@ -317,13 +309,14 @@ def test_make_inter_append(c3m):
 
 
 def test_sign_rootcert_namecollide(c3m):
+    expir = datetime.date(2022, 9, 9)
     # Legit guy
-    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root5")
+    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root5", expiry=expir)
     c3m.add_trusted_certs(root_pub)
     # Attacker guy
-    evil_pub, evil_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root5")   # NOTE same name
+    evil_pub, evil_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root5", expiry=expir)   # NOTE same name
     # evil chain
-    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=evil_pub, using_priv=evil_priv)
+    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=evil_pub, using_priv=evil_priv, expiry=expir)
     chain = c3m.load(inter_pub)
     with pytest.raises(c3main.InvalidSignatureError):
         ret = c3m.verify(chain)
@@ -331,9 +324,10 @@ def test_sign_rootcert_namecollide(c3m):
 
 
 def test_sign_payload(c3m):
-    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9")
+    expir = datetime.date(2022, 9, 9)
+    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
     c3m.add_trusted_certs(root_pub)
-    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_name="root9", using_priv=root_priv)
+    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_name="root9", using_priv=root_priv, expiry=expir)
 
     payload = b"How are you gentlemen"
     signed_payload, should_be_none = c3m.MakeSign(c3m.SIGN_PAYLOAD, payload=payload, using_pub=inter_pub, using_priv=inter_priv)

@@ -2,6 +2,7 @@
 from __future__ import print_function
 
 import sys, re, base64, os, traceback, random, binascii, textwrap, functools, datetime
+
 from pprint import pprint
 
 import ecdsa
@@ -12,6 +13,8 @@ b3.composite_schema.strict_mode = True  # helpful errors when packing wrong
 
 import getpassword
 import pass_protect     # todo: packagize
+
+# a "chain" is a list of data_and_sig structures
 
 # TODO TOMORROW:
 
@@ -283,13 +286,13 @@ class C3(object):
         return
 
     def add_trusted_certs(self, certs_bytes, force=False):
-        cert_das_list = self.load(certs_bytes)
+        cert_chain = self.load(certs_bytes)
         if not force:
             try:
-                self.verify(cert_das_list)
+                self.verify(cert_chain)
             except UntrustedChainError:   # ignore this one failure mode because we havent installed
                 pass                      # this/these certs yet!
-        for das in cert_das_list:
+        for das in cert_chain:
             if "cert" not in das:         # skip payload if there is one
                 continue
             self.trusted_certs[das.cert.cert_id] = das.cert
@@ -307,7 +310,7 @@ class C3(object):
         #       baked in and also a trust store of its own)
         print("note: skipping verifying Using for now (requires tool root cert bake-in)")
         ueprivd = self.load_priv_block(uepriv)
-        if ueprivd.privtype != PRIVTYPE_BARE:
+        if ueprivd.priv_type != PRIVTYPE_BARE:
             print("Unlocking using's private key for use-")
         upriv = self.decrypt_private_key(ueprivd)
         # todo: ensure Using's priv key and pub key match?
@@ -324,13 +327,13 @@ class C3(object):
         _, index = self.expect_key_header([KEY_PRIV_CRCWRAPPED], b3.DICT, block_bytes, 0)
         privd = AttrDict(b3.schema_unpack(PRIV_CRCWRAPPED, block_bytes[index:]))
         # --- Sanity checks ---
-        self.schema_assert_mandatory_fields_truthy(PRIV_CRCWRAPPED, privd)
-        if privd.privtype not in KNOWN_PRIVTYPES:
-            raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.privtype, KNOWN_PRIVTYPES))
-        if privd.keytype not in KNOWN_KEYTYPES:
-            raise StructureError("Unknown keytype %d in priv block (wanted %r)" % (privd.keytype, KNOWN_KEYTYPES))
+        self.schema_ensure_mandatory_fields(PRIV_CRCWRAPPED, privd)
+        if privd.priv_type not in KNOWN_PRIVTYPES:
+            raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.priv_type, KNOWN_PRIVTYPES))
+        if privd.key_type not in KNOWN_KEYTYPES:
+            raise StructureError("Unknown keytype %d in priv block (wanted %r)" % (privd.key_type, KNOWN_KEYTYPES))
         # --- Integrity check ---
-        data_crc = binascii.crc32(privd.privdata, 0) % (1 << 32)
+        data_crc = binascii.crc32(privd.priv_data, 0) % (1 << 32)
         if data_crc != privd.crc32:
             raise IntegrityError("Private key block failed data integrity check (crc32)")
         return privd
@@ -340,17 +343,17 @@ class C3(object):
     # - currently we just have Bare and pass_protect
 
     def decrypt_private_key(self, privd):
-        if privd.privtype == PRIVTYPE_BARE:
-            return privd.privdata
-        if privd.privtype != PRIVTYPE_PASS_PROTECT:
-            raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.privtype, KNOWN_PRIVTYPES))
-        if self.pass_protect.DualPasswordsNeeded(privd.privdata):  # todo: we dont support this here yet
+        if privd.priv_type == PRIVTYPE_BARE:
+            return privd.priv_data
+        if privd.priv_type != PRIVTYPE_PASS_PROTECT:
+            raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.priv_type, KNOWN_PRIVTYPES))
+        if self.pass_protect.DualPasswordsNeeded(privd.priv_data):  # todo: we dont support this here yet
             raise NotImplementedError("Private key wants dual passwords")
 
         # --- Try password from environment variables ---
         passw = getpassword.get_env_password()
         if passw:
-            priv_ret = self.pass_protect.SinglePassDecrypt(privd.privdata, passw)
+            priv_ret = self.pass_protect.SinglePassDecrypt(privd.priv_data, passw)
             # Note exceptions are propagated right out here, its an exit if this decrypt fails.
             return priv_ret
 
@@ -363,7 +366,7 @@ class C3(object):
                 raise ValueError("No password supplied, exiting")
 
             try:
-                priv_ret = self.pass_protect.SinglePassDecrypt(privd.privdata, passw)
+                priv_ret = self.pass_protect.SinglePassDecrypt(privd.priv_data, passw)
             except Exception as e:
                 print("Failed decrypting private key: ", str(e))
                 continue        # let user try again
@@ -407,25 +410,25 @@ class C3(object):
         public_part = public_part[index:]               # chop off the header
 
         # Should be a list of DAS structures, so pythonize the list
-        das_list = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)
+        chain = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)
 
-        # unpack the certs & sigs in das_list
-        for i, das in enumerate(das_list):
+        # unpack the certs & sigs in chain
+        for i, das in enumerate(chain):
             # dont unpack cert if this is the first das and ppkey is PAYLOAD
             if i > 0 or ppkey == KEY_LIST_CERTS:
                 das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_part))
-                self.schema_assert_mandatory_fields_truthy(CERT_SCHEMA, das.cert)
+                self.schema_ensure_mandatory_fields(CERT_SCHEMA, das.cert)
 
             das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_part))
-            self.schema_assert_mandatory_fields_truthy(SIG_SCHEMA, das.sig)
+            self.schema_ensure_mandatory_fields(SIG_SCHEMA, das.sig)
 
-        return das_list
+        return chain
 
     def ctnm(self, das):
         if not das:
             return ""
         if "cert" in das:
-            return " (cert %r) " % das.cert.name
+            return " (cert %r) " % das.cert.cert_id
         else:
             return " (payload) "
 
@@ -437,18 +440,18 @@ class C3(object):
     # In: Data-And-Sigs items list
     # Out: payload bytes or an Exception
 
-    def verify(self, das_list):
-        certs_by_id = {das.cert.cert_id : das.cert for das in das_list if "cert" in das}
+    def verify(self, chain):
+        certs_by_id = {das.cert.cert_id : das.cert for das in chain if "cert" in das}
         found_in_trusted = False         # whether we have established a link to the trusted_certs
 
-        for i, das in enumerate(das_list):
+        for i, das in enumerate(chain):
             signing_cert_id = das.sig.signing_cert_id
             # --- Find the 'next cert' ie the one which verifies our signature ---
             if not signing_cert_id:
                 # --- no signing-id means "next cert in the chain" ---
-                if i + 1 >= len(das_list):      # have we fallen off the end?
+                if i + 1 >= len(chain):      # have we fallen off the end?
                     raise ShortChainError(self.ctnm(das)+"Next issuer cert is missing")
-                next_cert = das_list[i + 1].cert
+                next_cert = chain[i + 1].cert
             else:
                 # --- got a name, look in trusted for it, then in ourself (self-signed) ---
                 if signing_cert_id in self.trusted_certs:
@@ -463,7 +466,7 @@ class C3(object):
             try:
                 VK = ecdsa.VerifyingKey.from_string(next_cert.public_key, ecdsa.NIST256p)
                 VK.verify(das.sig.signature, das.data_part)  # returns True or raises exception
-            except Exception as e:       # wrap theirs with our own error class
+            except Exception:       # wrap theirs with our own error class
                 raise InvalidSignatureError(self.ctnm(das)+"Signature failed to verify")
             # --- Now do next das in line ---
 
@@ -472,10 +475,10 @@ class C3(object):
         # Even tho all errors are exceptions.
         if found_in_trusted:
             # print("SUCCESS")
-            first_das = das_list[0]
+            first_das = chain[0]
             if "cert" not in first_das:
                 # print(" - Returning payload")
-                return first_das.data_bytes
+                return first_das.data_part
             return True
         raise UntrustedChainError("Chain does not link to trusted certs")
 
@@ -509,13 +512,13 @@ class C3(object):
 
             # Now unpack the actual dict too
             dx = b3.schema_unpack(schema, das_bytes)
-            self.schema_assert_mandatory_fields_truthy(schema, dx)
+            self.schema_ensure_mandatory_fields(schema, dx)
             out.append(AttrDict(dx))
             index += data_len
         return out
 
 
-    def schema_assert_mandatory_fields_truthy(self, schema, dx):
+    def schema_ensure_mandatory_fields(self, schema, dx):
         for field_def in schema:                    # by name
             # only check if mandatory bool flag is both present AND true.
             if len(field_def) > 3 and field_def[3] is True:
@@ -539,9 +542,9 @@ class C3(object):
             raise StructureError("Header structure is invalid")  # from None
             # raise .. from None disables py3's chaining (cleaner unhandled prints) but isnt legal py2
         if key not in want_keys:
-            raise StructureError("Incorrect key in header - wanted %r got %r" % (want_keys, key))
+            raise StructureError("Incorrect key in header - wanted %r got %s" % (want_keys, repr(key)[:32]))
         if data_type != want_type:
-            raise StructureError("Incorrect type in header - wanted %r got %r" % (want_type, data_type))
+            raise StructureError("Incorrect type in header - wanted %r got %s" % (want_type, repr(data_type)[:32]))
         if not has_data:
             raise StructureError("Invalid header - no has_data")
         if index == len(buf):
@@ -604,7 +607,7 @@ class C3(object):
         combine_name = name + ".b64.txt"
         if os.path.isfile(combine_name):
             print("Loading combined file ", combine_name)
-            both_strs = open(combine_name,"r").read()
+            both_strs = open(combine_name, "r").read()
 
             # regex cap the header lines
 
@@ -660,12 +663,11 @@ class C3(object):
 
     def make_friendly_fields(self, public_part, schema, friendly_field_names):
         # --- get to that first dict ---
-        # Assume standard pub_bytes structure (das_list with header)
+        # Assume standard pub_bytes structure (chain with header)
         ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
         public_part = public_part[index:]
         das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
-        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_bytes))
-        found_something = False
+        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
 
         # --- Cross-check whether wanted fields exist (and map names to types) ---
         # This is because we're doing this with payloads as well as certs
@@ -712,30 +714,30 @@ class C3(object):
     # This includes spurious fields, etc.
 
     # We expect there to be an empty line (or end of file) after the base64 block, and NOT more stuff.
-    # More stuff immediately after the base64 block is an error.
+    # This means EOF immediately after the base64 block is an error.
 
     def check_friendly_fields(self, text_public_part, schema):
         types_by_name = {i[1]: i[0] for i in schema}
         # --- Ensure vertical structure is legit ---
         # 1 or no header line (-), immediately followed by 0 or more FF lines ([),
-        # immediately followd by base64 then only whitespace or eof.
+        # immediately followd by base64 then a mandatory whitespace (e.g empty line).
         lines = text_public_part.splitlines()
         c0s = ''.join([line[0] if line else ' ' for line in lines])+' '
-        X = re.match(r"^ *(-?)(\[*)([a-z-A-Z0-9/=+]+) ", c0s)
+        X = re.match(r"^\s*(-?)(\[*)([a-zA-Z0-9/=+]+) ", c0s)
         if not X:
-            raise StructureError("Public part text structure is invalid")
+            raise StructureError("File text vertical structure is invalid")
         ff_lines = lines[X.start(2) : X.end(2)]    # extract FF lines
         b64_lines = lines[X.start(3) : X.end(3)]   # extract base64 lines
         b64_block = ''.join(b64_lines)
         public_part = base64.b64decode(b64_block)
 
         # --- get to that first dict in the secure block ---
-        # Assume standard pub_bytes structure (das_list with header)
+        # Assume standard pub_bytes structure (chain with header)
         # Let these just exception out.
         ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
         public_part = public_part[index:]
         das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
-        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_bytes))
+        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
 
         # --- Cross-check each Friendy Field line ---
         for ff in ff_lines:
@@ -763,8 +765,8 @@ class C3(object):
                 val = int(fval)
             elif typ == b3.BOOL:
                 val = bool(fval.lower().strip() == "True")
-            elif typ == b3.SCHED:
-                val = "%s, %s" % (val.strftime("%-I:%M%p").lower(), val.strftime("%-d %B %Y"))
+            # elif typ == b3.SCHED:   # todo: this is the wrong way around
+            #    val = "%s, %s" % (fval.strftime("%-I:%M%p").lower(), fval.strftime("%-d %B %Y"))
             elif typ == b3.BASICDATE:
                 val = datetime.datetime.strptime(fval, "%d %B %Y").date()
             else:
@@ -847,18 +849,18 @@ class C3(object):
         if action == self.MAKE_SELFSIGNED:
             # self-sign it, make sig
             SK = ecdsa.SigningKey.from_string(new_key_priv, ecdsa.NIST256p)
-            sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=cert_id)  # note byname
-            sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
+            sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=cert_id)
+            sig_part = b3.schema_pack(SIG_SCHEMA, sig_d)
 
         # --- Sign the thing (cert or payload) using Using, if not selfsign ----
         else:
             SK = ecdsa.SigningKey.from_string(using_priv, ecdsa.NIST256p)
             sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=using_id)
             # note  ^^^ signing_cert_id can be blank, in which case using_pub should have bytes to append
-            sig_bytes = b3.schema_pack(SIG_SCHEMA, sig_d)
+            sig_part = b3.schema_pack(SIG_SCHEMA, sig_d)
 
         # --- Make data-and-sig structure ---
-        das = AttrDict(data_part=payload_bytes, sig_part=sig_bytes)
+        das = AttrDict(data_part=payload_bytes, sig_part=sig_part)
         das_bytes = b3.schema_pack(DATA_AND_SIG, das)
 
         # --- prepend header for das itself so straight concatenation makes a list-of-das ---
@@ -893,3 +895,39 @@ if __name__ == "__main__":
 
 
 
+# Making ULIDS
+
+# Courtesy of https://github.com/valohai/ulid2/blob/master/ulid2/__init__.py
+#
+# import time, calendar, struct
+# _last_entropy = None
+# _last_timestamp = None
+#
+# def generate_binary_ulid(timestamp=None, monotonic=False):
+#     """
+#     Generate the bytes for an ULID.
+#     :param timestamp: An optional timestamp override.
+#                       If `None`, the current time is used.
+#     :type timestamp: int|float|datetime.datetime|None
+#     :param monotonic: Attempt to ensure ULIDs are monotonically increasing.
+#                       Monotonic behavior is not guaranteed when used from multiple threads.
+#     :type monotonic: bool
+#     :return: Bytestring of length 16.
+#     :rtype: bytes
+#     """
+#     global _last_entropy, _last_timestamp
+#     if timestamp is None:
+#         timestamp = time.time()
+#     elif isinstance(timestamp, datetime.datetime):
+#         timestamp = calendar.timegm(timestamp.utctimetuple())
+#
+#     ts = int(timestamp * 1000.0)
+#     ts_bytes = struct.pack(b'!Q', ts)[2:]
+#     entropy = os.urandom(10)
+#     if monotonic and _last_timestamp == ts and _last_entropy is not None:
+#         while entropy < _last_entropy:
+#             entropy = os.urandom(10)
+#     _last_entropy = entropy
+#     _last_timestamp = ts
+#     return ts_bytes + entropy
+#
