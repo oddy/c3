@@ -190,16 +190,17 @@ def CommandlineMain():
         if "using" not in args:
             print("'make' needs --using=<name> or --using=self, please supply")
             return
-        if "link" not in args:
-            print("'make' needs --link=append or --link=name, please supply")
-            return
 
         expiry = ParseExpiryDate(args.expiry)
         if args.using == "self":
             pub, priv = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name=args.name, expiry=expiry)
         else:
+            if "link" not in args:
+                print("'make' needs --link=append or --link=name, please supply")
+                return
+
             upub, uepriv = c3m.load_files(args.using)         # uses files
-            upriv = c3m.decrypt_private_key(c3m.load_priv_block())  # (might) ask user for password
+            upriv = c3m.decrypt_private_key(c3m.load_priv_block(uepriv))  # (might) ask user for password
             link = {"append" : c3m.LINK_APPEND, "name" : c3m.LINK_NAME}[args.link]
 
             pub, priv = c3m.MakeSign(action=c3m.MAKE_INTERMEDIATE, name=args.name, expiry=expiry,
@@ -212,7 +213,10 @@ def CommandlineMain():
         combine = True
         if "parts" in args and args.parts == "split":
             combine = False
-        c3m.write_files(args.name, pub, epriv, combine)
+
+        pub_ff_names = ["subject_name", "expiry_date", "issued_date"]
+        pub_ffields = c3m.make_friendly_fields(pub, CERT_SCHEMA, pub_ff_names)
+        c3m.write_files(args.name, pub, epriv, combine, pub_ff_lines=pub_ffields)
         return
 
     # python c3main.py  sign --payload=payload.txt --link=append  --using=inter1
@@ -224,13 +228,16 @@ def CommandlineMain():
         payload_bytes = open(args.payload, "rb").read()
 
         upub, uepriv = c3m.load_files(args.using)  # uses files
-        upriv = c3m.decrypt_private_key(c3m.load_priv_block())  # (might) ask user for password
+        upriv = c3m.decrypt_private_key(c3m.load_priv_block(uepriv))  # (might) ask user for password
         link = {"append": c3m.LINK_APPEND, "name": c3m.LINK_NAME}[args.link]
 
         pub, priv = c3m.MakeSign(action=c3m.SIGN_PAYLOAD, name=args.name, payload=payload_bytes,
                                  using_priv=upriv, using_pub=upub, link=link)
 
-        c3m.write_files(args.payload, pub, b"", combine=False)  # no private part, so no combine
+        # pub_ff_names = ["whatever", "app_specific", "fields_app_schema_has"]
+        # pub_ffields = c3m.make_friendly_fields(pub, APP_SCHEMA, pub_ff_names)
+        c3m.write_files(args.payload, pub, b"", combine=False)   #, pub_ff_lines=pub_ffields))
+        # Note: ^^ no private part, so no combine.         ^^^ how to friendly-fields for app
         return
 
     # python c3main.py  verify --name=payload.txt --trusted=root1
@@ -572,11 +579,15 @@ class C3(object):
         return line
 
 
-    def write_files(self, name, public_part, private_part=b"", combine=True, desc=""):
+    def write_files(self, name, public_part, private_part=b"", combine=True, desc="", pub_ff_lines="", priv_ff_lines=""):
         pub_desc = desc if desc else (name + " - Payload & Public Certs")
         priv_desc = (desc or name) + " - PRIVATE Key"
-        pub_str = self.asc_header(pub_desc) + "\n" + base64.encodebytes(public_part).decode()
-        priv_str = self.asc_header(priv_desc) + "\n" + base64.encodebytes(private_part).decode()
+        if pub_ff_lines:
+            pub_ff_lines += "\n"
+        pub_str = self.asc_header(pub_desc) + "\n" + pub_ff_lines + base64.encodebytes(public_part).decode()
+        if priv_ff_lines:
+            priv_ff_lines += "\n"
+        priv_str = self.asc_header(priv_desc) + "\n" + priv_ff_lines + base64.encodebytes(private_part).decode()
 
         print()
         print(pub_str)
@@ -604,8 +615,8 @@ class C3(object):
             print("Wrote PRIVATE file: ", fname)
 
 
-    def load_files(self, name):
 
+    def load_files(self, name):
         header_rex = r"^-+\[ (.*?) \]-+$"
         pub_text_block = ""
         priv_text_block = ""
@@ -657,6 +668,7 @@ class C3(object):
         pub_block = self.check_friendly_fields(pub_text_block, CERT_SCHEMA)
         priv_block = self.check_friendly_fields(priv_text_block, PRIV_CRCWRAPPED)
 
+
         return pub_block, priv_block
 
 
@@ -664,17 +676,17 @@ class C3(object):
     # so pub_text_block and priv_text_block.
 
 
-
     # ============================== Friendly Fields ===============================================
 
-    # In: public_part bytes, schema for first dict, field names to output in friendly format
+
+    # In: block_part bytes, schema for first dict, field names to output in friendly format
     # Out: field names & values as text lines (or exceptions)
 
-    def make_friendly_fields(self, public_part, schema, friendly_field_names):
+    def make_friendly_fields(self, block_part, schema, friendly_field_names):
         # --- get to that first dict ---
         # Assume standard pub_bytes structure (chain with header)
         # We can't use load() here because load() does mandatory schema checks and we
-        dx0 = self.extract_first_chain_dict(public_part, schema)
+        dx0 = self.extract_first_dict(block_part, schema)
 
         # --- Cross-check whether wanted fields exist (and map names to types) ---
         # This is because we're doing this with payloads as well as certs
@@ -715,7 +727,7 @@ class C3(object):
 
 
     # Note: unlike make_friendly_fields, we raise exceptions when something is wrong
-    # In: text with friendly-fields lines, followed by the base64 of the public part.
+    # In: text with header line, friendly-fields lines, followed by the base64 of the secure public or private block.
     # Out: exceptions or True.
     # We're pretty strict compared to make, any deviations at all will raise an exception.
     # This includes spurious fields, etc.
@@ -726,11 +738,18 @@ class C3(object):
     # This does not ensure mandatory fields are present like load() does, so it can be used for
     # more things e.g. friendly_fields and check_expiry.  (and by user code for payloads).
 
-    def extract_first_chain_dict(self, public_part, schema):
-        ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
-        public_part = public_part[index:]
-        das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
-        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
+    def extract_first_dict(self, part_block, schema):
+        if schema == CERT_SCHEMA:       # public part block
+            ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, part_block, 0)
+            public_part = part_block[index:]
+            das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
+            dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
+        elif schema == PRIV_CRCWRAPPED:    # private part block
+            ppkey, index = self.expect_key_header([KEY_PRIV_CRCWRAPPED,], b3.DICT, part_block, 0)
+            private_part = part_block[index:]
+            dx0 = AttrDict(b3.schema_unpack(schema, private_part))
+        else:
+            raise TypeError("Unknown schema for first-dict extract")
         return dx0
 
 
@@ -752,7 +771,7 @@ class C3(object):
         # --- get to that first dict in the secure block ---
         # Assume standard pub_bytes structure (chain with header)
         # Let these just exception out.
-        dx0 = self.extract_first_chain_dict(bytes_part, schema)
+        dx0 = self.extract_first_dict(bytes_part, schema)
 
         # --- Cross-check each Friendy Field line ---
         for ff in ff_lines:
@@ -820,7 +839,7 @@ class C3(object):
     # Out: true or exception
 
     def check_privpub_match_ecdsanist256p(self, priv_key_bytes, using_pub_block):
-        using_pub_key = self.extract_first_chain_dict(using_pub_block, CERT_SCHEMA).public_key
+        using_pub_key = self.extract_first_dict(using_pub_block, CERT_SCHEMA).public_key
         priv = ecdsa.SigningKey.from_string(priv_key_bytes, ecdsa.NIST256p)
         pub = priv.get_verifying_key()
         if pub.to_string() != using_pub_key:
@@ -915,7 +934,7 @@ class C3(object):
 
 
     def ensure_not_expired(self, using_pub):
-        dx0 = self.extract_first_chain_dict(using_pub, CERT_SCHEMA)
+        dx0 = self.extract_first_dict(using_pub, CERT_SCHEMA)
         expiry = dx0["expiry_date"]
         if datetime.date.today() > expiry:
             raise CertExpired("cert specified by --using has expired")

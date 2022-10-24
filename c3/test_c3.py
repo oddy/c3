@@ -74,6 +74,9 @@ def interactive_password_test():        # note: not a pytest test
         print("FAIL - roundtripped key does not match original")
 
 
+# def files_save_load_test():         # note: not a pytest test. Reads/Writes disk.
+#    c3m = c3main.C3()
+
 
 
 
@@ -218,7 +221,7 @@ def test_make_friendly_fields(c3m):
 
 
 
-root1_pub_text = """
+ff_root1_pub_text = """
 --------------------[ root1 - Payload & Public Certs ]----------------------
 [ Subject Name ]  root1
 [ Expiry Date  ]  9 September 2022
@@ -230,29 +233,31 @@ EbKFB4gzSK0aT/EJAQVyb290MQ==
 this_part_should_be_ignored
 """
 
+ff_root1_b64_block = base64.b64decode('\n'.join(ff_root1_pub_text.splitlines()[4:8]))
+
 def test_ff_check_happy_path(c3m):
-    ret = c3m.check_friendly_fields(root1_pub_text, c3main.CERT_SCHEMA)
-    assert ret == True
+    ret = c3m.check_friendly_fields(ff_root1_pub_text, c3main.CERT_SCHEMA)
+    assert ret == ff_root1_b64_block
 
 def test_ff_busted_vertical_1(c3m):
-    busted_vertical_structure = "\n\n".join(root1_pub_text.splitlines())
+    busted_vertical_structure = "\n\n".join(ff_root1_pub_text.splitlines())
     with pytest.raises(c3main.StructureError, match="structure is invalid"):
         c3m.check_friendly_fields(busted_vertical_structure, c3main.CERT_SCHEMA)
 
 def test_ff_bad_field(c3m):
-    bad_ff = root1_pub_text.replace("Date  ]", "Date]")
+    bad_ff = ff_root1_pub_text.replace("Date  ]", "Date]")
     with pytest.raises(c3main.TamperError, match="format for visible"):
         c3m.check_friendly_fields(bad_ff, c3main.CERT_SCHEMA)
 
 def test_ff_spurious_field(c3m):
     spurious_field = "[ Spurious Field ]  Hello world"
-    bad_ff = root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
+    bad_ff = ff_root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
     with pytest.raises(c3main.TamperError, match="not present in the secure area"):
         c3m.check_friendly_fields(bad_ff, c3main.CERT_SCHEMA)
 
 def test_ff_field_value_mismatch(c3m):
     spurious_field = "[ Subject Name ]  Harold"
-    bad_ff = root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
+    bad_ff = ff_root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
     with pytest.raises(c3main.TamperError, match="does not match secure"):
         c3m.check_friendly_fields(bad_ff, c3main.CERT_SCHEMA)
 
