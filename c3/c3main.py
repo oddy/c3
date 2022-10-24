@@ -12,60 +12,35 @@ import b3
 b3.composite_schema.strict_mode = True  # helpful errors when packing wrong
 
 import getpassword
-import pass_protect     # todo: packagize
+import pass_protect
 
-# a "chain" is a list of data_and_sig structures
 
 # TODO TOMORROW:
 
-# We need a diagram of how the functions flow, and the various entry points.
 
-# Be as janky with this stuff as we want, we're not doing a public release, just making the UX not suck for us.
+# Be as janky with this stuff as we want, we're not doing a public release, just making the UX not suck too bad for us.
 # this means click is out, --nopassword=yes is ok.
 
-# how to square names & ids with the commandline handling?
-# !!! we call the ID "root1" and commingle that with the filename. !!!
-# !!! and duplicate that to subject name. and keep --name for the command line. !!!
-# !!! this is good enough for our immediate needs i believe. !!!
-# !!! park the ulid generation but leave the commented out code for later. !!!
-# this fulfils janky while also giving us future proofed ID-ing and allows mandatory subject naming.
+# Policy: For simplicity for now, the subject names and cert_ids are the same. Later there should be ULIDs.
 
-# ----
-
-# Make signing do an error if the would-be signing cert has expired.
-# That is all.
-# We are NOT implementing DNF flags at this time.
-
-# ----
-
+# [NOT DOING] DNF Flags
 # [DONE] * fix the new field names in the code.
-
 # [DONE]  - rebuild the test data with the new field names.
-
-# [DONE]* get expiry dates and expiry handling in.
-#  - there's a gap here because load_using is command-liney, it can't be tested because it uses files.
-#  - we need to ensure that MakeSign always gets a using pub, and that its link parameter is actually explicit.  [DONE]
-#  - so MakeSign itself can check the using pub under all circumstances.
-
+# [DONE] * get expiry dates and expiry handling in.
+# [DONE] * have verify return a nice chain along with the payload if any.
+# [DONE] * the update b3 fixmes
+# [DONE] * cross check priv key with pub key on using load
 
 
 # * integrate check_friendly's vertical validation with load_files loader.
 #   - make sure binary blocks is still the gateway point.
 #   - integrate it with the private part loader too (already happens via load_files i think)
 
-# [DONE] * have verify return a nice chain along with the payload if any.
-
 
 # * integrate make_friendly at commandline level or save_files level
 #   - its a files thing not a bytes thing so.
-#   - so e.g. licensing can have its own friendly fields.
+#   - so e.g. licensing can have its own friendly fields.   [DO THIS DURING LICENSING]
 
-
-# [DONE] * the update b3 fixmes
-
-# * cross check priv key with pub key on using load?
-#   - gonna go with requiring the public part for Using even if link=name
-#   - OR skip the cross check and issue a warning.
 
 # * Break the code up into bytes operations (c3main.C3) and files stuff (load/save & friendlies)
 #   - password soliciting might be in the middle, that's ok.
@@ -73,9 +48,12 @@ import pass_protect     # todo: packagize
 
 # Clean up password prompts and commandline UX
 
+# * improve expiry date parsing
+
 # * fix up commandline handling - do this in conjunction with the Licensing use case.
 #   - this is about the API functions too.
 #   - which we need the Licensing use case for anyway.
+
 
 # -------------------------------
 # release as beta.
@@ -627,9 +605,10 @@ class C3(object):
 
 
     def load_files(self, name):
-        pub_block = b""
-        priv_block = b""
+
         header_rex = r"^-+\[ (.*?) \]-+$"
+        pub_text_block = ""
+        priv_text_block = ""
 
         combine_name = name + ".b64.txt"
         if os.path.isfile(combine_name):
@@ -640,48 +619,51 @@ class C3(object):
 
             hdrs = list(re.finditer(header_rex, both_strs, re.MULTILINE))
             if len(hdrs) != 2:
-                print(" Error: number of headers in combined file is not 2")
+                print(" Warning: number of headers in combined file is not 2")
 
             # Structure: first header, first data, second header, second data, end of file
-            # data offsets are end-of-first-header : start-of-second-header,
-            block0_b64 = both_strs[hdrs[0].end() : hdrs[1].start()]
-            block1_b64 = both_strs[hdrs[1].end():]
-
-            # There will be extraneous \n's but thankfully b64decode ignores them.
-            block0 = base64.b64decode(block0_b64)
-            block1 = base64.b64decode(block1_b64)
+            # data offsets are start-of-first-header : start-of-second-header,
+            # because check_friendly_fields wants to see the headers too if they are there.
+            block0_text = both_strs[hdrs[0].start() : hdrs[1].start()]
+            block1_text = both_strs[hdrs[1].start( ):]
 
             # normally the second block is the private block, but if a user has shuffled things around
             # we cater for that by checking which block has 'PRIVATE' in its header description
             if "PRIVATE" in hdrs[0].group(1):       # Private block comes first (not the normal case)
-                pub_block, priv_block = block1, block0
+                pub_text_block, priv_text_block = block1_text, block0_text
             else:   # Otherwise assume the public block comes first.
-                print("normal")
-                pub_block, priv_block = block0, block1
+                pub_text_block, priv_text_block = block0_text, block1_text
 
         # Enable more-specific files to override the combined file, if both exist
 
         pub_only_name = name + ".public.b64.txt"
         if os.path.isfile(pub_only_name):
             print("Loading public file ", pub_only_name)
-            pub_str = open(pub_only_name, "r").read()
-            hdrs = list(re.finditer(header_rex, pub_str, re.MULTILINE))
+            pub_text_block = open(pub_only_name, "r").read()
+            hdrs = list(re.finditer(header_rex, pub_text_block, re.MULTILINE))
             if len(hdrs) != 1:
-                print(" Error: too many headers in public file")
-            pub_block_b64 = pub_str[hdrs[0].end():]
-            pub_block = base64.b64decode(pub_block_b64)
+                print(" Warning: too %s headers in public file" % ("many" if len(hdrs)>1 else "few"))
 
         priv_only_name = name + ".PRIVATE.b64.txt"
         if os.path.isfile(priv_only_name):
             print("Loading private file ", priv_only_name)
-            priv_str = open(priv_only_name, "r").read()
-            hdrs = list(re.finditer(header_rex, priv_str, re.MULTILINE))
+            priv_text_block = open(priv_only_name, "r").read()
+            hdrs = list(re.finditer(header_rex, priv_text_block, re.MULTILINE))
             if len(hdrs) != 1:
-                print(" Error: too many headers in private file")
-            priv_block_b64 = priv_str[hdrs[0].end():]
-            priv_block = base64.b64decode(priv_block_b64)
+                print(" Warning: too %s headers in public file" % ("many" if len(hdrs) > 1 else "few"))
+
+        # Ensure friendly (visible) text-fields (if any) match the secure binary info.
+        # This also extracts and converts the base64 secure block parts.
+        pub_block = self.check_friendly_fields(pub_text_block, CERT_SCHEMA)
+        priv_block = self.check_friendly_fields(priv_text_block, PRIV_CRCWRAPPED)
 
         return pub_block, priv_block
+
+
+    # Include the headers, don't base64 decode the base64 parts of the blocks,
+    # so pub_text_block and priv_text_block.
+
+
 
     # ============================== Friendly Fields ===============================================
 
@@ -752,12 +734,12 @@ class C3(object):
         return dx0
 
 
-    def check_friendly_fields(self, text_public_part, schema):
+    def check_friendly_fields(self, text_part, schema):
         types_by_name = {i[1]: i[0] for i in schema}
         # --- Ensure vertical structure is legit ---
         # 1 or no header line (-), immediately followed by 0 or more FF lines ([),
         # immediately followd by base64 then a mandatory whitespace (e.g empty line).
-        lines = text_public_part.splitlines()
+        lines = text_part.splitlines()
         c0s = ''.join([line[0] if line else ' ' for line in lines])+' '
         X = re.match(r"^\s*(-?)(\[*)([a-zA-Z0-9/=+]+) ", c0s)
         if not X:
@@ -765,12 +747,12 @@ class C3(object):
         ff_lines = lines[X.start(2) : X.end(2)]    # extract FF lines
         b64_lines = lines[X.start(3) : X.end(3)]   # extract base64 lines
         b64_block = ''.join(b64_lines)
-        public_part = base64.b64decode(b64_block)
+        bytes_part = base64.b64decode(b64_block)
 
         # --- get to that first dict in the secure block ---
         # Assume standard pub_bytes structure (chain with header)
         # Let these just exception out.
-        dx0 = self.extract_first_chain_dict(public_part, schema)
+        dx0 = self.extract_first_chain_dict(bytes_part, schema)
 
         # --- Cross-check each Friendy Field line ---
         for ff in ff_lines:
@@ -811,7 +793,8 @@ class C3(object):
             secure_val = dx0[name]
             if secure_val != val:
                 raise TamperError("Field '%s' visible value %r does not match secure value %r" % (name, val, secure_val))
-        return True  # success
+
+        return bytes_part  # success
 
 
     # ============================== Signing =======================================================
