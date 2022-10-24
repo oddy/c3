@@ -14,10 +14,6 @@ b3.composite_schema.strict_mode = True  # helpful errors when packing wrong
 import getpassword
 import pass_protect
 
-
-# TODO TOMORROW:
-
-
 # Be as janky with this stuff as we want, we're not doing a public release, just making the UX not suck too bad for us.
 # this means click is out, --nopassword=yes is ok.
 
@@ -30,35 +26,18 @@ import pass_protect
 # [DONE] * have verify return a nice chain along with the payload if any.
 # [DONE] * the update b3 fixmes
 # [DONE] * cross check priv key with pub key on using load
-
-
-# * integrate check_friendly's vertical validation with load_files loader.
-#   - make sure binary blocks is still the gateway point.
-#   - integrate it with the private part loader too (already happens via load_files i think)
-
-
-# * integrate make_friendly at commandline level or save_files level
-#   - its a files thing not a bytes thing so.
-#   - so e.g. licensing can have its own friendly fields.   [DO THIS DURING LICENSING]
-
+# [DONE] * integrate check_friendly's vertical validation with load_files loader.
+# [DONE] * integrate make_friendly at commandline level or save_files level
+# [DONE] * fix up commandline handling - do this in conjunction with the Licensing use case.
 
 # * Break the code up into bytes operations (c3main.C3) and files stuff (load/save & friendlies)
-#   - password soliciting might be in the middle, that's ok.
-#   - It would be nice to very briefly document the bytes API so we have a solid lock on the gateway boundary.
-
-# Clean up password prompts and commandline UX
-
+#   - Turn into Package.
+# * Clean up password prompts and commandline UX
 # * improve expiry date parsing
-
-# * fix up commandline handling - do this in conjunction with the Licensing use case.
-#   - this is about the API functions too.
-#   - which we need the Licensing use case for anyway.
+# * Do build to pypi, 0.9.0
 
 
-# -------------------------------
-# release as beta.
-# dont distribute verify seperately, and dont distribute a libsodium dll yet.
-
+# [DO THIS DURING LICENSING]  - so e.g. licensing gets its own friendly fields.
 
 
 # --- Public structure stuff ---
