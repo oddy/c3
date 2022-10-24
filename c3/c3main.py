@@ -30,28 +30,36 @@ import pass_protect     # todo: packagize
 # !!! park the ulid generation but leave the commented out code for later. !!!
 # this fulfils janky while also giving us future proofed ID-ing and allows mandatory subject naming.
 
+# ----
 
+# Make signing do an error if the would-be signing cert has expired.
+# That is all.
+# We are NOT implementing DNF flags at this time.
+
+# ----
 
 # [DONE] * fix the new field names in the code.
 
 # [DONE]  - rebuild the test data with the new field names.
 
-# * get expiry dates and expiry handling in.
+# [DONE]* get expiry dates and expiry handling in.
+#  - there's a gap here because load_using is command-liney, it can't be tested because it uses files.
+#  - we need to ensure that MakeSign always gets a using pub, and that its link parameter is actually explicit.  [DONE]
+#  - so MakeSign itself can check the using pub under all circumstances.
+
+
 
 # * integrate check_friendly's vertical validation with load_files loader.
 #   - make sure binary blocks is still the gateway point.
 #   - integrate it with the private part loader too (already happens via load_files i think)
 
-# * have verify return a nice chain along with the payload if any.
+# [DONE] * have verify return a nice chain along with the payload if any.
 
 
 # * integrate make_friendly at commandline level or save_files level
 #   - its a files thing not a bytes thing so.
 #   - so e.g. licensing can have its own friendly fields.
 
-# * [DONT] integrate load_using into MakeSign
-#   - tho we've been keeping them seperate so that upriv and upub can be a bytes-gateway.
-#   - because MakeSign operates bytes in bytes out, which we need for e.g. acmd operation.
 
 # [DONE] * the update b3 fixmes
 
@@ -144,7 +152,12 @@ class ShortChainError(VerifyError):  # the next cert for verifying is missing of
 class UntrustedChainError(VerifyError):  # the chain ends with a self-sign we dont have in Trusted
     pass
 class TamperError(VerifyError):     # Friendly Fields are present in the textual file,
-    pass             #   but don't match up with the secure fields
+    pass                             #   but don't match up with the secure fields
+class SignError(C3Error):
+    pass
+class CertExpired(SignError):       # can't sign, --using's cert has expired.
+    pass
+
 
 
 # ============ Command line ========================================================================
@@ -197,27 +210,22 @@ def CommandlineMain():
 
     if cmd == "make":
         if "using" not in args:
-            print("'make' needs --using=<name> or '--using=self', please supply")
+            print("'make' needs --using=<name> or --using=self, please supply")
             return
+        if "link" not in args:
+            print("'make' needs --link=append or --link=name, please supply")
+            return
+
         expiry = ParseExpiryDate(args.expiry)
         if args.using == "self":
             pub, priv = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name=args.name, expiry=expiry)
         else:
-            # one call to MakeSign with  using=<name> and append=true or false?
-            # you have to load_using anyway, but upriv can be missing.
+            upub, uepriv = c3m.load_files(args.using)         # uses files
+            upriv = c3m.decrypt_private_key(c3m.load_priv_block())  # (might) ask user for password
+            link = {"append" : c3m.LINK_APPEND, "name" : c3m.LINK_NAME}[args.link]
 
-            # verify uses --trusted NOT --using, so we COULD integrate load_using into MakeSign.
-
-            upub, upriv = c3m.load_using(args.using)
-            if args.link == "append":
-                pub, priv = c3m.MakeSign(action=c3m.MAKE_INTERMEDIATE, name=args.name,
-                                         using_priv=upriv, using_pub=upub, expiry=expiry)
-            elif args.link == "name":
-                pub, priv = c3m.MakeSign(action=c3m.MAKE_INTERMEDIATE, name=args.name,
-                                         using_priv=upriv, using_name=args.using, expiry=expiry)
-            else:
-                print("please supply public-using --mode=append --mode=link")
-                return
+            pub, priv = c3m.MakeSign(action=c3m.MAKE_INTERMEDIATE, name=args.name, expiry=expiry,
+                                     using_priv=upriv, using_pub=upub, using_name=args.using, link=link)
 
         bare = "nopassword" in args  # has to be --nopassword=blah for now.
         if not bare:
@@ -237,18 +245,13 @@ def CommandlineMain():
             return
         payload_bytes = open(args.payload, "rb").read()
 
-        upub, upriv = c3m.load_using(args.using)
-        if args.link == "append":
-            pub, priv = c3m.MakeSign(action=c3m.SIGN_PAYLOAD, name=args.payload, payload=payload_bytes,
-                                     using_priv=upriv, using_pub=upub)
-        elif args.link == "name":
-            pub, priv = c3m.MakeSign(action=c3m.SIGN_PAYLOAD, name=args.payload, payload=payload_bytes,
-                                     using_priv=upriv, using_name=args.using)
-        else:
-            print("please supply public-using --link=append --link=name")
-            return
+        upub, uepriv = c3m.load_files(args.using)  # uses files
+        upriv = c3m.decrypt_private_key(c3m.load_priv_block())  # (might) ask user for password
+        link = {"append": c3m.LINK_APPEND, "name": c3m.LINK_NAME}[args.link]
 
-        print("priv from makesign is ",repr(priv))
+        pub, priv = c3m.MakeSign(action=c3m.SIGN_PAYLOAD, name=args.name, payload=payload_bytes,
+                                 using_priv=upriv, using_pub=upub, link=link)
+
         c3m.write_files(args.payload, pub, b"", combine=False)  # no private part, so no combine
         return
 
@@ -295,6 +298,15 @@ class AttrDict(dict):
 #         That's the caller's (user's) remit.
 
 class C3(object):
+
+    # Make/Sign actions:
+    MAKE_SELFSIGNED = 1
+    MAKE_INTERMEDIATE = 2
+    SIGN_PAYLOAD = 3
+
+    LINK_APPEND = 1
+    LINK_NAME = 2
+
     def __init__(self):
         self.trusted_certs = {}   # by name. For e.g. root certs etc.
         self.pass_protect = pass_protect.PassProtect()      # todo: c3sign only
@@ -313,23 +325,6 @@ class C3(object):
             self.trusted_certs[das.cert.cert_id] = das.cert
         return
 
-    # ============ Load-using step =====================
-
-    def load_using(self, using_name):
-        upub, uepriv = self.load_files(using_name)
-        if not upub:
-            raise ValueError("No public part found for --using")
-        if not uepriv:
-            raise ValueError("No private part found for --using")
-        # todo: verify Using's pub? (would require the tool end to have a root pub cert
-        #       baked in and also a trust store of its own)
-        print("note: skipping verifying Using for now (requires tool root cert bake-in)")
-        ueprivd = self.load_priv_block(uepriv)
-        if ueprivd.priv_type != PRIVTYPE_BARE:
-            print("Unlocking using's private key for use-")
-        upriv = self.decrypt_private_key(ueprivd)
-        # todo: ensure Using's priv key and pub key match?
-        return upub, upriv
 
     # ============ Private key decryption  =========================================================
 
@@ -696,10 +691,8 @@ class C3(object):
     def make_friendly_fields(self, public_part, schema, friendly_field_names):
         # --- get to that first dict ---
         # Assume standard pub_bytes structure (chain with header)
-        ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
-        public_part = public_part[index:]
-        das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
-        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
+        # We can't use load() here because load() does mandatory schema checks and we
+        dx0 = self.extract_first_chain_dict(public_part, schema)
 
         # --- Cross-check whether wanted fields exist (and map names to types) ---
         # This is because we're doing this with payloads as well as certs
@@ -748,6 +741,17 @@ class C3(object):
     # We expect there to be an empty line (or end of file) after the base64 block, and NOT more stuff.
     # This means EOF immediately after the base64 block is an error.
 
+    # This does not ensure mandatory fields are present like load() does, so it can be used for
+    # more things e.g. friendly_fields and check_expiry.  (and by user code for payloads).
+
+    def extract_first_chain_dict(self, public_part, schema):
+        ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
+        public_part = public_part[index:]
+        das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
+        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
+        return dx0
+
+
     def check_friendly_fields(self, text_public_part, schema):
         types_by_name = {i[1]: i[0] for i in schema}
         # --- Ensure vertical structure is legit ---
@@ -766,10 +770,7 @@ class C3(object):
         # --- get to that first dict in the secure block ---
         # Assume standard pub_bytes structure (chain with header)
         # Let these just exception out.
-        ppkey, index = self.expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
-        public_part = public_part[index:]
-        das0 = self.list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
-        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
+        dx0 = self.extract_first_chain_dict(public_part, schema)
 
         # --- Cross-check each Friendy Field line ---
         for ff in ff_lines:
@@ -813,7 +814,6 @@ class C3(object):
         return True  # success
 
 
-
     # ============================== Signing =======================================================
 
     #               |     no payload             payload
@@ -833,10 +833,17 @@ class C3(object):
         return priv.to_string(), pub.to_string()
 
 
-    # Make/Sign actions:
-    MAKE_SELFSIGNED = 1
-    MAKE_INTERMEDIATE = 2
-    SIGN_PAYLOAD = 3
+    # In: priv key bytes, pub chain block
+    # Out: true or exception
+
+    def check_privpub_match_ecdsanist256p(self, priv_key_bytes, using_pub_block):
+        using_pub_key = self.extract_first_chain_dict(using_pub_block, CERT_SCHEMA).public_key
+        priv = ecdsa.SigningKey.from_string(priv_key_bytes, ecdsa.NIST256p)
+        pub = priv.get_verifying_key()
+        if pub.to_string() != using_pub_key:
+            raise SignError("private key and public key do not match")
+        return True
+
 
     # name = name to give selfsigned cert, name to give inter cert.  (payload doesnt get a name)
     # payload  = the payload bytes, if signing a payload
@@ -844,20 +851,24 @@ class C3(object):
     # Note: incoming using_priv comes in bare, caller must decrypt.
     #       return var new_key_priv goes out bare, caller must encrypt.
 
-    def MakeSign(self, action, name="", payload=b"", using_priv=b"", using_pub=b"", using_name="", expiry=None):
-        # if using Using, sanity-check using - enforce exclusive either-or
-        if action in (self.MAKE_INTERMEDIATE, self.SIGN_PAYLOAD):
-            if not using_name and not using_pub:
-                raise ValueError("both using_name and using_pub are empty, please select one")
-            if using_name and using_pub:
-                raise ValueError("both using_name and using_pub have values, please select one")
+    def MakeSign(self, action, name="", payload=b"", using_priv=b"", using_pub=b"", using_name="", expiry=None, link=LINK_APPEND):
+        # using_pub must now always be present unless MAKE_SELFSIGNED
+        if action != self.MAKE_SELFSIGNED:
+            if not using_pub:
+                raise ValueError("please supply public part of --using")
+            # Make sure the signing cert hasn't expired!
+            self.ensure_not_expired(using_pub)
+            # Make sure the keypair really is a keypair
+            self.check_privpub_match_ecdsanist256p(using_priv, using_pub)
+
         # sanity check expiry, needed for selfsign and intermediate
         if action in (self.MAKE_INTERMEDIATE, self.MAKE_SELFSIGNED):
             if not expiry:
                 raise ValueError("creating cert: please provide expiry date")
 
-        cert_id = name.encode("ascii")  # Note: dupe of name for now. Can be ULID in future.
-        using_id = using_name.encode("ascii")  # Note: dupe of name, maybe ULID later, etc.
+        # Policy: for now, cert_id and subject name are the same.  Consider ULID in future.
+        cert_id = name.encode("ascii")
+        using_id = using_name.encode("ascii")
         new_key_priv = None
 
         # --- Key gen if applicable ---
@@ -879,17 +890,15 @@ class C3(object):
 
         # --- Make a selfsign if applicable ---
         if action == self.MAKE_SELFSIGNED:
-            # self-sign it, make sig
             SK = ecdsa.SigningKey.from_string(new_key_priv, ecdsa.NIST256p)
             sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=cert_id)
-            sig_part = b3.schema_pack(SIG_SCHEMA, sig_d)
-
         # --- Sign the thing (cert or payload) using Using, if not selfsign ----
         else:
             SK = ecdsa.SigningKey.from_string(using_priv, ecdsa.NIST256p)
             sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=using_id)
             # note  ^^^ signing_cert_id can be blank, in which case using_pub should have bytes to append
-            sig_part = b3.schema_pack(SIG_SCHEMA, sig_d)
+
+        sig_part = b3.schema_pack(SIG_SCHEMA, sig_d)
 
         # --- Make data-and-sig structure ---
         das = AttrDict(data_part=payload_bytes, sig_part=sig_part)
@@ -899,12 +908,13 @@ class C3(object):
         das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
 
         # --- Append Using's public_part (the chain) if applicable ---
-        if using_pub and action != self.MAKE_SELFSIGNED:
+        if link == self.LINK_APPEND and action != self.MAKE_SELFSIGNED:
             # we need to:
             # 1) strip using_public_part's public_part header,
             # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
             # (we should test this)
             _, index = self.expect_key_header([KEY_LIST_CERTS], b3.LIST, using_pub, 0)
+            # 1a) ensure the signing cert hasn't expired!  (This only works with link-append mode because link-name mode has no using_pub)
             using_pub = using_pub[index:]
             # 2) concat our data + using_public_part's data
             out_public_part = das_bytes_with_hdr + using_pub
@@ -920,6 +930,13 @@ class C3(object):
 
         return out_public_with_hdr, new_key_priv
 
+
+    def ensure_not_expired(self, using_pub):
+        dx0 = self.extract_first_chain_dict(using_pub, CERT_SCHEMA)
+        expiry = dx0["expiry_date"]
+        if datetime.date.today() > expiry:
+            raise CertExpired("cert specified by --using has expired")
+        return True
 
 
 if __name__ == "__main__":
