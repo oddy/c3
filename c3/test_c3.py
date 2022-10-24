@@ -400,16 +400,6 @@ def test_keypair_matching(c3m):
                                              link=c3m.LINK_NAME)
 
 
-
-
-
-
-
-
-
-
-
-
 # ---- Truncate and glitch loops -----
 
 # Testing what happens if the public_part buffer is incomplete
