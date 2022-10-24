@@ -111,7 +111,38 @@ def test_verify_success_ext_root1(c3m):
     c3m.add_trusted_certs(root1_block)
     chain = c3m.load(public_part)
     ret = c3m.verify(c3m.load(public_part))
-    assert ret == plaintext_payload
+    assert ret == True
+
+# payload extractor & meta-data chain maker
+
+def test_get_meta_root1(c3m):
+    chain = c3m.load(root1_block)
+    assert chain[0].cert.cert_id == b"root1"
+    assert chain[0].sig.signing_cert_id == b"root1"
+    # Meta is just chain without all the big-bytesy things so it's nicer to pprint()
+    meta = c3m.get_meta(chain)
+    assert meta[0].cert.cert_id == b"root1"
+    assert meta[0].sig.signing_cert_id == b"root1"
+
+def test_get_meta_payload(c3m):
+    chain = c3m.load(public_part)
+    meta = c3m.get_meta(chain)
+    assert len(meta) == 1
+    assert meta[0].cert.cert_id == b"inter2"
+    assert meta[0].sig.signing_cert_id == b"root1"
+
+def test_get_payload_root1(c3m):
+    chain = c3m.load(root1_block)
+    payload = c3m.get_payload(chain)
+    assert payload == b""
+
+def test_get_payload_payload(c3m):
+    chain = c3m.load(public_part)
+    payload = c3m.get_payload(chain)
+    assert payload == plaintext_payload
+
+
+
 
 
 # Glitch the payload contents so the signature fails to verify
@@ -334,8 +365,8 @@ def test_sign_payload(c3m):
     assert should_be_none is None
 
     chain = c3m.load(signed_payload)
-    ret_payload = c3m.verify(chain)
-    assert ret_payload == payload   # successful verify returns payload
+    verify_ok = c3m.verify(chain)
+    assert verify_ok == True
 
 
 

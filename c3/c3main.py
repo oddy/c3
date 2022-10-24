@@ -1,7 +1,7 @@
 
 from __future__ import print_function
 
-import sys, re, base64, os, traceback, random, binascii, textwrap, functools, datetime
+import sys, re, base64, os, traceback, random, binascii, textwrap, functools, datetime, copy
 
 from pprint import pprint
 
@@ -32,9 +32,11 @@ import pass_protect     # todo: packagize
 
 
 
-# * fix the new field names in the code.
+# [DONE] * fix the new field names in the code.
+
+# [DONE]  - rebuild the test data with the new field names.
+
 # * get expiry dates and expiry handling in.
-#   - rebuild the test data with the new field names.
 
 # * integrate check_friendly's vertical validation with load_files loader.
 #   - make sure binary blocks is still the gateway point.
@@ -51,7 +53,7 @@ import pass_protect     # todo: packagize
 #   - tho we've been keeping them seperate so that upriv and upub can be a bytes-gateway.
 #   - because MakeSign operates bytes in bytes out, which we need for e.g. acmd operation.
 
-# * the update b3 fixmes
+# [DONE] * the update b3 fixmes
 
 # * cross check priv key with pub key on using load?
 #   - gonna go with requiring the public part for Using even if link=name
@@ -248,6 +250,7 @@ def CommandlineMain():
 
         print("priv from makesign is ",repr(priv))
         c3m.write_files(args.payload, pub, b"", combine=False)  # no private part, so no combine
+        return
 
     # python c3main.py  verify --name=payload.txt --trusted=root1
 
@@ -257,14 +260,22 @@ def CommandlineMain():
             tr_pub, _ = c3m.load_files(args.trusted)
             print("tr_pub is ",repr(tr_pub))
             c3m.add_trusted_certs(tr_pub)
+        else:
+            print("Please specify a trusted cert with --trusted=")
+            return
 
         public_part, _ = c3m.load_files(args.name)
         ret = c3m.verify(c3m.load(public_part))
         print("\n\nverify returns", repr(ret))
         return
 
-
     UsageBail("Unknown command")
+
+
+# Delivering a cut-down Chain out of verify:
+# chain is list of:
+#   data_part,  ->  cert (or payload)   ->  cert fields
+#   sig_part,   ->  sig                 ->  signature & signing_cert_id
 
 
 
@@ -274,6 +285,10 @@ def CommandlineMain():
 class AttrDict(dict):
     def __getattr__(self, name):
         return self[name]
+    def __deepcopy__(self, memo):
+        return self.__class__(
+            {k: copy.deepcopy(v, memo) for k, v in self.items()}
+            )
 
 
 # Policy: verify() only reads from self.trusted_certs, it doesnt write anything into there.
@@ -474,16 +489,33 @@ class C3(object):
         # If there is a payload, return it otherwise return True. (So bool-ness works.)
         # Even tho all errors are exceptions.
         if found_in_trusted:
-            # print("SUCCESS")
-            first_das = chain[0]
-            if "cert" not in first_das:
-                # print(" - Returning payload")
-                return first_das.data_part
             return True
         raise UntrustedChainError("Chain does not link to trusted certs")
 
+    # In: chain from load()
+    # Out: payload bytes
 
+    def get_payload(self, chain):
+        first_das = chain[0]
+        if "cert" not in first_das:         # first data_and_sig element's data_part is a payload
+            return first_das.data_part
+        return b""      # first data_and_sig element's data_part is a cert
 
+    # In: chain from load()
+    # Out: trimmed-down metadata-only chain
+
+    def get_meta(self, chain):
+        st = 0
+        first_das = chain[0]
+        if "cert" not in first_das:     # skip the first data_and_sig if it's a payload one
+            st = 1
+        chain2 = copy.deepcopy(chain[st:])
+        for i in chain2:
+            del i["data_part"]
+            del i["sig_part"]
+            del i["cert"]["public_key"]
+            del i["sig"]["signature"]
+        return chain2
 
     # ============================== Internal Functions ============================================
 
@@ -505,7 +537,7 @@ class C3(object):
             if not has_data or data_len == 0:
                 raise StructureError("List item header invalid - no data")
 
-            das_bytes = b3.item.decode_value(data_type, has_data, is_null, data_len, buf, index)  # fixme: should be b3.decode_value
+            das_bytes = b3.decode_value(data_type, has_data, is_null, data_len, buf, index)
 
             if len(das_bytes) == 0:
                 raise StructureError("List item data is missing")
@@ -537,7 +569,7 @@ class C3(object):
         if not buf:
             raise StructureError("No data - buffer is empty or None")
         try:
-            key, data_type, has_data, is_null, data_len, index = b3.item.decode_header(buf, index)  #fixme: should be b3.decode_header
+            key, data_type, has_data, is_null, data_len, index = b3.decode_header(buf, index)
         except (IndexError, UnicodeDecodeError):
             raise StructureError("Header structure is invalid")  # from None
             # raise .. from None disables py3's chaining (cleaner unhandled prints) but isnt legal py2
