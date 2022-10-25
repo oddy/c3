@@ -1,11 +1,13 @@
 
-import pytest, base64, traceback, random, os, datetime
+
+import base64, traceback, random, os, datetime
 from pprint import pprint
 
+import pytest
 import b3
 import b3.hexdump
 
-import c3main
+from c3.c3main import C3
 
 
 # test file saving/loading by round-tripping.
@@ -19,7 +21,7 @@ import c3main
 
 @pytest.fixture
 def c3m():
-    c3_obj = c3main.C3()
+    c3_obj = C3()
     return c3_obj
 
 
@@ -289,7 +291,7 @@ def test_make_selfsigned(c3m):
     # make a selfsigned then verify it and check the cert name == the sig name
     expiry = datetime.date(2023, 9, 9)
 
-    pub_part_bytes, priv_part_bytes = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name="test1", expiry=expiry)
+    pub_part_bytes, priv_part_bytes = c3m.make_sign(action=c3m.MAKE_SELFSIGNED, name="test1", expiry=expiry)
     c3m.add_trusted_certs(pub_part_bytes)
 
     chain = c3m.load(pub_part_bytes)
@@ -300,23 +302,23 @@ def test_make_selfsigned(c3m):
 
 def test_make_supply_neither_inval(c3m):
     with pytest.raises(ValueError):
-        inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9")
+        inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9")
 
 
 def test_make_supply_both_inval(c3m):
     with pytest.raises(ValueError):
-        inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=b"a", using_name="root9")
+        inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=b"a", using_name="root9")
         # Note it doen't get to needing the missing using_priv or expiry
 
 
 def test_make_inter_name(c3m):
     expir = datetime.date(2023, 9, 9)
     # Root cert
-    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
+    root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
     c3m.add_trusted_certs(root_pub)
 
-    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_priv=root_priv, expiry=expir,
-                                         using_pub=root_pub, using_name="root9",  link=c3m.LINK_NAME)
+    inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_priv=root_priv, expiry=expir,
+                                          using_pub=root_pub, using_name="root9", link=c3m.LINK_NAME)
 
     chain = c3m.load(inter_pub)
     ret = c3m.verify(chain)
@@ -326,11 +328,11 @@ def test_make_inter_name(c3m):
 def test_make_inter_append(c3m):
     expir = datetime.date(2023, 9, 9)
     # Root cert
-    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
+    root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
     c3m.add_trusted_certs(root_pub)
 
-    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_priv=root_priv, expiry=expir,
-                                         using_pub=root_pub, using_name="root9",  link=c3m.LINK_APPEND)
+    inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_priv=root_priv, expiry=expir,
+                                          using_pub=root_pub, using_name="root9", link=c3m.LINK_APPEND)
 
     chain = c3m.load(inter_pub)
     ret = c3m.verify(chain)
@@ -341,10 +343,10 @@ def test_make_inter_append_expired_root(c3m):
     expir_root = datetime.date(2021, 9, 9)
     expir = datetime.date(2023, 9, 9)
     # Root cert
-    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir_root)
+    root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir_root)
     c3m.add_trusted_certs(root_pub)
     with pytest.raises(c3main.CertExpired):
-        c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_priv=root_priv, expiry=expir)
+        c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_priv=root_priv, expiry=expir)
 
 
 # Note that this doesn't fail, even though we are *appending* the root9 cert itself into the chain
@@ -360,12 +362,12 @@ def test_make_inter_append_expired_root(c3m):
 def test_sign_rootcert_namecollide(c3m):
     expir = datetime.date(2023, 9, 9)
     # Legit guy
-    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root5", expiry=expir)
+    root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root5", expiry=expir)
     c3m.add_trusted_certs(root_pub)
     # Attacker guy
-    evil_pub, evil_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root5", expiry=expir)   # NOTE same name
+    evil_pub, evil_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root5", expiry=expir)   # NOTE same name
     # evil chain
-    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=evil_pub, using_priv=evil_priv, expiry=expir)
+    inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=evil_pub, using_priv=evil_priv, expiry=expir)
     chain = c3m.load(inter_pub)
     with pytest.raises(c3main.InvalidSignatureError):
         ret = c3m.verify(chain)
@@ -374,12 +376,12 @@ def test_sign_rootcert_namecollide(c3m):
 
 def test_sign_payload(c3m):
     expir = datetime.date(2023, 9, 9)
-    root_pub, root_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
+    root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
 
-    inter_pub, inter_priv = c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_name="root9", using_priv=root_priv, expiry=expir, link=c3m.LINK_NAME)
+    inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_name="root9", using_priv=root_priv, expiry=expir, link=c3m.LINK_NAME)
 
     payload = b"How are you gentlemen"
-    signed_payload, should_be_none = c3m.MakeSign(c3m.SIGN_PAYLOAD, payload=payload, using_pub=inter_pub, using_priv=inter_priv)
+    signed_payload, should_be_none = c3m.make_sign(c3m.SIGN_PAYLOAD, payload=payload, using_pub=inter_pub, using_priv=inter_priv)
     assert should_be_none is None
 
     chain = c3m.load(signed_payload)
@@ -391,13 +393,13 @@ def test_sign_payload(c3m):
 
 def test_keypair_matching(c3m):
     expir = datetime.date(2023, 9, 9)
-    r1_pub, r1_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root1", expiry=expir)
-    r2_pub, r2_priv = c3m.MakeSign(c3m.MAKE_SELFSIGNED, name="root1", expiry=expir)  # note simulating same name error
+    r1_pub, r1_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root1", expiry=expir)
+    r2_pub, r2_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root1", expiry=expir)  # note simulating same name error
 
     with pytest.raises(c3main.SignError, match="key do not match"):
-        c3m.MakeSign(c3m.MAKE_INTERMEDIATE, name="inter2", using_pub=r1_pub,
-                                             using_name="root1", using_priv=r2_priv, expiry=expir,
-                                             link=c3m.LINK_NAME)
+        c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter2", using_pub=r1_pub,
+                      using_name="root1", using_priv=r2_priv, expiry=expir,
+                      link=c3m.LINK_NAME)
 
 
 # ---- Truncate and glitch loops -----
@@ -413,7 +415,7 @@ def truncmain():
     for i in range(len(buf)+1, 1, -1):
         buf2 = buf[:i]
         try:
-            xx = c3m.load(buf2)
+            xx = c3m.load_pub_block(buf2)
         except Exception as e:
             # print("%4i    load   %20s" % (i,e))
             continue
@@ -435,7 +437,7 @@ def glitchmain():
     for i in range(len(buf)):
         buf2 = buf[:i] + b"\x00" + buf[i+1:]
         try:
-            xx = c3m.load(buf2)
+            xx = c3m.load_pub_block(buf2)
         except Exception as e:
             print("%4i    load   %20s" % (i,e))
             if "index out of" in str(e):
@@ -459,7 +461,7 @@ def smallrandfuzz():
         buf = random.randbytes(40)
         #buf = b"\xdd\x37\x40\xed\x4d\x30\x44" + random.randbytes(60)
         try:
-            xx = c3m.load(buf)
+            xx = c3m.load_pub_block(buf)
             out = "omg SUCCESS omg"
         except Exception as e:
             out = str(e)

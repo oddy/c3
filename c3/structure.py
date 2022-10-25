@@ -1,10 +1,10 @@
 
-import copy, binascii
+import copy, binascii, datetime
 
 import b3
 
 from constants import *
-from errors import StructureError, IntegrityError
+from errors import StructureError, IntegrityError, CertExpired
 
 
 class AttrDict(dict):
@@ -13,9 +13,52 @@ class AttrDict(dict):
     def __deepcopy__(self, memo):
         return self.__class__({k: copy.deepcopy(v, memo) for k, v in self.items()})
 
+
+# --- Private part/block save & load ---
+
+# in:  private key bytes, and if they are unencrypted (bare) or not
+# out: block bytes with header.
+
+def make_priv_block(priv_bytes, bare=False):
+    privd = AttrDict()
+    privd["key_type"] = KEYTYPE_ECDSA_256P
+    privd["priv_type"] = PRIVTYPE_BARE if bare else PRIVTYPE_PASS_PROTECT
+    privd["priv_data"] = priv_bytes
+    privd["crc32"] = binascii.crc32(privd.priv_data, 0) % (1 << 32)
+    out_bytes = b3.schema_pack(PRIV_CRCWRAPPED, privd)
+    out_bytes_with_hdr = b3.encode_item_joined(KEY_PRIV_CRCWRAPPED, b3.DICT, out_bytes)
+    return out_bytes_with_hdr
+
+
+# in: block bytes from e.g. LoadFiles
+# out: DICT with private key + metadata
+# sanity & crc32 check the priv block, then shuck it and return the inner data.
+# Caller must then decrypt the private key if needed.
+
+def load_priv_block(block_bytes):
+    _, index = expect_key_header([KEY_PRIV_CRCWRAPPED], b3.DICT, block_bytes, 0)
+    privd = AttrDict(b3.schema_unpack(PRIV_CRCWRAPPED, block_bytes[index:]))
+    # --- Sanity checks ---
+    schema_ensure_mandatory_fields(PRIV_CRCWRAPPED, privd)
+    if privd.priv_type not in KNOWN_PRIVTYPES:
+        raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.priv_type, KNOWN_PRIVTYPES))
+    if privd.key_type not in KNOWN_KEYTYPES:
+        raise StructureError("Unknown keytype %d in priv block (wanted %r)" % (privd.key_type, KNOWN_KEYTYPES))
+    # --- Integrity check ---
+    data_crc = binascii.crc32(privd.priv_data, 0) % (1 << 32)
+    if data_crc != privd.crc32:
+        raise IntegrityError("Private key block failed data integrity check (crc32)")
+    return privd
+
+
+
 # --- Public part loader ---
 
-def load(public_part):
+# In: public_part bytes
+# Out: data-and-sig list cert chain structure
+# Note: the inverse of this function is part of make_sign
+
+def load_pub_block(public_part):
     # The public part should have an initial header that indicates whether the first das is a payload or a cert
     ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
     public_part = public_part[index:]               # chop off the header
@@ -34,28 +77,6 @@ def load(public_part):
         schema_ensure_mandatory_fields(SIG_SCHEMA, das.sig)
 
     return chain
-
-# --- Private part loader ---
-
-# in: block bytes from e.g. LoadFiles
-# out: private key + metadata dict
-# sanity & crc32 check the priv block, then shuck it and return the inner data.
-# caller goes ok if privtype is pass_protect use pass_protect to decrypt the block etc.
-
-def load_priv_block(block_bytes):
-    _, index = expect_key_header([KEY_PRIV_CRCWRAPPED], b3.DICT, block_bytes, 0)
-    privd = AttrDict(b3.schema_unpack(PRIV_CRCWRAPPED, block_bytes[index:]))
-    # --- Sanity checks ---
-    schema_ensure_mandatory_fields(PRIV_CRCWRAPPED, privd)
-    if privd.priv_type not in KNOWN_PRIVTYPES:
-        raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.priv_type, KNOWN_PRIVTYPES))
-    if privd.key_type not in KNOWN_KEYTYPES:
-        raise StructureError("Unknown keytype %d in priv block (wanted %r)" % (privd.key_type, KNOWN_KEYTYPES))
-    # --- Integrity check ---
-    data_crc = binascii.crc32(privd.priv_data, 0) % (1 << 32)
-    if data_crc != privd.crc32:
-        raise IntegrityError("Private key block failed data integrity check (crc32)")
-    return privd
 
 
 # --- Structure helper functions ---
@@ -145,6 +166,13 @@ def extract_first_dict(part_block, schema):
         raise TypeError("Unknown schema for first-dict extract")
     return dx0
 
+def ensure_not_expired(using_pub):
+    dx0 = extract_first_dict(using_pub, CERT_SCHEMA)
+    expiry = dx0["expiry_date"]
+    if datetime.date.today() > expiry:
+        raise CertExpired("cert specified by --using has expired")
+    return True
+
 
 # For error message readability
 
@@ -188,4 +216,43 @@ def get_meta(chain):
         del i["cert"]["public_key"]
         del i["sig"]["signature"]
     return chain2
+
+
+# Making ULIDS
+
+# Courtesy of https://github.com/valohai/ulid2/blob/master/ulid2/__init__.py
+#
+# import time, calendar, struct
+# _last_entropy = None
+# _last_timestamp = None
+#
+# def generate_binary_ulid(timestamp=None, monotonic=False):
+#     """
+#     Generate the bytes for an ULID.
+#     :param timestamp: An optional timestamp override.
+#                       If `None`, the current time is used.
+#     :type timestamp: int|float|datetime.datetime|None
+#     :param monotonic: Attempt to ensure ULIDs are monotonically increasing.
+#                       Monotonic behavior is not guaranteed when used from multiple threads.
+#     :type monotonic: bool
+#     :return: Bytestring of length 16.
+#     :rtype: bytes
+#     """
+#     global _last_entropy, _last_timestamp
+#     if timestamp is None:
+#         timestamp = time.time()
+#     elif isinstance(timestamp, datetime.datetime):
+#         timestamp = calendar.timegm(timestamp.utctimetuple())
+#
+#     ts = int(timestamp * 1000.0)
+#     ts_bytes = struct.pack(b'!Q', ts)[2:]
+#     entropy = os.urandom(10)
+#     if monotonic and _last_timestamp == ts and _last_entropy is not None:
+#         while entropy < _last_entropy:
+#             entropy = os.urandom(10)
+#     _last_entropy = entropy
+#     _last_timestamp = ts
+#     return ts_bytes + entropy
+#
+
 

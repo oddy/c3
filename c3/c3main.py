@@ -1,10 +1,10 @@
 
 from __future__ import print_function
 
-import sys, re, base64, os, binascii, functools, datetime, copy
+import sys, re, datetime
+from pprint import pprint
 
 import ecdsa
-import b3
 
 import getpassword
 import pass_protect
@@ -98,7 +98,7 @@ def CommandlineMain():
 
         expiry = ParseExpiryDate(args.expiry)
         if args.using == "self":
-            pub, priv = c3m.MakeSign(action=c3m.MAKE_SELFSIGNED, name=args.name, expiry=expiry)
+            pub_block, priv = c3m.make_sign(action=MAKE_SELFSIGNED, name=args.name, expiry=expiry)
         else:
             if "link" not in args:
                 print("'make' needs --link=append or --link=name, please supply")
@@ -106,22 +106,27 @@ def CommandlineMain():
 
             upub, uepriv = textfiles.load_files(args.using)         # uses files
             upriv = c3m.decrypt_private_key(structure.load_priv_block(uepriv))  # (might) ask user for password
-            link = {"append" : c3m.LINK_APPEND, "name" : c3m.LINK_NAME}[args.link]
+            link = {"append" : LINK_APPEND, "name" : LINK_NAME}[args.link]
 
-            pub, priv = c3m.MakeSign(action=c3m.MAKE_INTERMEDIATE, name=args.name, expiry=expiry,
-                                     using_priv=upriv, using_pub=upub, using_name=args.using, link=link)
+            pub_block, priv = c3m.make_sign(action=MAKE_INTERMEDIATE, name=args.name, expiry=expiry,
+                                 using_priv=upriv, using_pub=upub, using_name=args.using, link=link)
 
-        bare = "nopassword" in args  # has to be --nopassword=blah for now.
+        bare = "nopassword" in args  # Note: has to be --nopassword=blah for now.
         if not bare:
             print("Setting password on private key-")
-        epriv = c3m.make_encrypt_private_key_block(priv, bare=bare)
+            epriv = c3m.encrypt_private_key(priv)
+        else:
+            epriv = priv
+        epriv_block = structure.make_priv_block(epriv, bare)
+
         combine = True
         if "parts" in args and args.parts == "split":
             combine = False
 
         pub_ff_names = ["subject_name", "expiry_date", "issued_date"]
-        pub_ffields = textfiles.make_friendly_fields(pub, CERT_SCHEMA, pub_ff_names)
-        textfiles.write_files(args.name, pub, epriv, combine, pub_ff_lines=pub_ffields)
+        pub_ffields = textfiles.make_friendly_fields(pub_block, CERT_SCHEMA, pub_ff_names)
+
+        textfiles.write_files(args.name, pub_block, epriv_block, combine, pub_ff_lines=pub_ffields)
         return
 
     # python c3main.py  sign --payload=payload.txt --link=append  --using=inter1
@@ -134,10 +139,10 @@ def CommandlineMain():
 
         upub, uepriv = textfiles.load_files(args.using)  # uses files
         upriv = c3m.decrypt_private_key(structure.load_priv_block(uepriv))  # (might) ask user for password
-        link = {"append": c3m.LINK_APPEND, "name": c3m.LINK_NAME}[args.link]
+        link = {"append": LINK_APPEND, "name": LINK_NAME}[args.link]
 
-        pub, priv = c3m.MakeSign(action=c3m.SIGN_PAYLOAD, name=args.name, payload=payload_bytes,
-                                 using_priv=upriv, using_pub=upub, link=link)
+        pub, priv = c3m.make_sign(action=SIGN_PAYLOAD, name=args.name, payload=payload_bytes,
+                                  using_priv=upriv, using_pub=upub, link=link)
 
         # pub_ff_names = ["whatever", "app_specific", "fields_app_schema_has"]
         # pub_ffields = c3m.make_friendly_fields(pub, APP_SCHEMA, pub_ff_names)
@@ -149,17 +154,23 @@ def CommandlineMain():
 
     if cmd == "verify":
         if "trusted" in args:
-            print("Loading trusted cert ",args.trusted)
+            print("Loading trusted cert ", args.trusted)
             tr_pub, _ = textfiles.load_files(args.trusted)
-            print("tr_pub is ",repr(tr_pub))
             c3m.add_trusted_certs(tr_pub)
         else:
             print("Please specify a trusted cert with --trusted=")
             return
 
         public_part, _ = textfiles.load_files(args.name)
-        ret = c3m.verify(structure.load(public_part))
+        chain = structure.load_pub_block(public_part)
+        ret = c3m.verify(chain)
         print("\n\nverify returns", repr(ret))
+        if not ret:
+            return
+        print("Chain:")
+        pprint(structure.get_meta(chain))
+        print("Payload:")
+        print(structure.get_payload(chain))
         return
 
     UsageBail("Unknown command")
@@ -176,21 +187,13 @@ def CommandlineMain():
 
 class C3(object):
 
-    # Make/Sign actions:
-    MAKE_SELFSIGNED = 1
-    MAKE_INTERMEDIATE = 2
-    SIGN_PAYLOAD = 3
-
-    LINK_APPEND = 1
-    LINK_NAME = 2
-
     def __init__(self):
         self.trusted_certs = {}   # by name. For e.g. root certs etc.
-        self.pass_protect = pass_protect.PassProtect()      # todo: c3sign only
+        self.pass_protect = pass_protect.PassProtect()
         return
 
     def add_trusted_certs(self, certs_bytes, force=False):
-        cert_chain = structure.load(certs_bytes)
+        cert_chain = structure.load_pub_block(certs_bytes)
         if not force:
             try:
                 self.verify(cert_chain)
@@ -203,80 +206,18 @@ class C3(object):
         return
 
 
-    # ============ Private key encryptio / decryption  =============================================
-    # Policy: we keep these here at top level because they interact with the user (passwords)
-    #         and use a pass_protect object which needs startup initialisation (load libsodium)
-
-    # given private key bytes
-    # encrypt em, getting a password from the user, if that is wanted.
-
-    def make_encrypt_private_key_block(self, bare_priv_bytes, bare=False):
-        if bare:                    # no encryption needed
-            priv_bytes = bare_priv_bytes
-        else:
-            prompt1 = "Private  key encryption password: "
-            prompt2 = "Re-enter key encryption password: "
-            passw = getpassword.get_double_enter_setting_password(prompt1, prompt2)
-            if not passw:
-                print("not passw for some reason")
-                return b""
-            priv_bytes = self.pass_protect.SinglePassEncrypt(bare_priv_bytes, passw)
-
-        privd = AttrDict()
-        privd["key_type"] = KEYTYPE_ECDSA_256P
-        privd["priv_type"] = PRIVTYPE_BARE if bare else PRIVTYPE_PASS_PROTECT
-        privd["priv_data"] = priv_bytes
-        privd["crc32"] = binascii.crc32(privd.priv_data, 0) % (1 << 32)
-        out_bytes = b3.schema_pack(PRIV_CRCWRAPPED, privd)
-        out_bytes_with_hdr = b3.encode_item_joined(KEY_PRIV_CRCWRAPPED, b3.DICT, out_bytes)
-        return out_bytes_with_hdr
-
-    # Has a "get password from user" loop
-    # here is where we would demux different private protection methods also.
-    # - currently we just have Bare and pass_protect
-
-    def decrypt_private_key(self, privd):
-        if privd.priv_type == PRIVTYPE_BARE:
-            return privd.priv_data
-        if privd.priv_type != PRIVTYPE_PASS_PROTECT:
-            raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.priv_type, KNOWN_PRIVTYPES))
-        if self.pass_protect.DualPasswordsNeeded(privd.priv_data):  # todo: we dont support this here yet
-            raise NotImplementedError("Private key wants dual passwords")
-
-        # --- Try password from environment variables ---
-        passw = getpassword.get_env_password()
-        if passw:
-            priv_ret = self.pass_protect.SinglePassDecrypt(privd.priv_data, passw)
-            # Note exceptions are propagated right out here, its an exit if this decrypt fails.
-            return priv_ret
-
-        # --- Try password from user ---
-        prompt = "Password to unlock private key: "
-        priv_ret = b""
-        while not priv_ret:
-            passw = getpassword.get_enter_password(prompt)
-            if not passw:
-                raise ValueError("No password supplied, exiting")
-
-            try:
-                priv_ret = self.pass_protect.SinglePassDecrypt(privd.priv_data, passw)
-            except Exception as e:
-                print("Failed decrypting private key: ", str(e))
-                continue        # let user try again
-        return priv_ret
 
 
     # ============ Verify =================================================================
-
     # Policy: Lives at top level because it needs access to toplevel's trust store
+
+    # In: Data-And-Sigs items list
+    # Out: payload bytes or an Exception
 
     # Apart from actual signature fails, there are 3 other ways for this to fail:
     # 1) unnamed issuer cert and no next cert in line aka "fell off the end" (ShortChainError)
     # 2) Named cert not found - in the cert store / trust store / certs_by_name etc
     # 3) Last cert is self-signed and verifies OK but isn't in the trust store. (Untrusted Chain)
-
-    # In: Data-And-Sigs items list
-    # Out: payload bytes or an Exception
 
     def verify(self, chain):
         certs_by_id = {das.cert.cert_id : das.cert for das in chain if "cert" in das}
@@ -327,14 +268,14 @@ class C3(object):
 
     # The way sign combines things, we get bytes out.
     # Cannot be seperated like load and verify are, nor do we want to.
+    # In: nothing
+    # Out: key pair as priv bytes and pub bytes
 
-
-    def GenKeysECDSANist256p(self):
+    def gen_keys_ECDSA_nist256p(self):
         curve = [i for i in ecdsa.curves.curves if i.name == 'NIST256p'][0]
         priv = ecdsa.SigningKey.generate(curve=curve)
         pub = priv.get_verifying_key()
         return priv.to_string(), pub.to_string()
-
 
     # In: priv key bytes, pub chain block
     # Out: true or exception
@@ -347,25 +288,24 @@ class C3(object):
             raise SignError("private key and public key do not match")
         return True
 
-
     # name = name to give selfsigned cert, name to give inter cert.  (payload doesnt get a name)
     # payload  = the payload bytes, if signing a payload
     # using_priv, using_pub/using_name = the parts of the Using keypair, if not making selfsigned
     # Note: incoming using_priv comes in bare, caller must decrypt.
     #       return var new_key_priv goes out bare, caller must encrypt.
 
-    def MakeSign(self, action, name="", payload=b"", using_priv=b"", using_pub=b"", using_name="", expiry=None, link=LINK_APPEND):
+    def make_sign(self, action, name="", payload=b"", using_priv=b"", using_pub=b"", using_name="", expiry=None, link=LINK_APPEND):
         # using_pub must now always be present unless MAKE_SELFSIGNED
-        if action != self.MAKE_SELFSIGNED:
+        if action != MAKE_SELFSIGNED:
             if not using_pub:
                 raise ValueError("please supply public part of --using")
             # Make sure the signing cert hasn't expired!
-            self.ensure_not_expired(using_pub)
+            structure.ensure_not_expired(using_pub)
             # Make sure the keypair really is a keypair
             self.check_privpub_match_ecdsanist256p(using_priv, using_pub)
 
         # sanity check expiry, needed for selfsign and intermediate
-        if action in (self.MAKE_INTERMEDIATE, self.MAKE_SELFSIGNED):
+        if action in (MAKE_INTERMEDIATE, MAKE_SELFSIGNED):
             if not expiry:
                 raise ValueError("creating cert: please provide expiry date")
 
@@ -375,9 +315,9 @@ class C3(object):
         new_key_priv = None
 
         # --- Key gen if applicable ---
-        if action in (self.MAKE_SELFSIGNED, self.MAKE_INTERMEDIATE):
+        if action in (MAKE_SELFSIGNED, MAKE_INTERMEDIATE):
             # make keys
-            new_key_priv, new_key_pub = self.GenKeysECDSANist256p()
+            new_key_priv, new_key_pub = self.gen_keys_ECDSA_nist256p()
             # make pub cert for pub key
 
             today = datetime.date.today()
@@ -391,12 +331,13 @@ class C3(object):
         else:
             payload_bytes = payload
 
-        # --- Make a selfsign if applicable ---
-        if action == self.MAKE_SELFSIGNED:
+        if action == MAKE_SELFSIGNED:
+            # --- Sign the cert using its own private key ---
             SK = ecdsa.SigningKey.from_string(new_key_priv, ecdsa.NIST256p)
             sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=cert_id)
-        # --- Sign the thing (cert or payload) using Using, if not selfsign ----
+
         else:
+            # --- Sign the thing (cert or payload) using Using, if not selfsign ----
             SK = ecdsa.SigningKey.from_string(using_priv, ecdsa.NIST256p)
             sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=using_id)
             # note  ^^^ signing_cert_id can be blank, in which case using_pub should have bytes to append
@@ -411,13 +352,11 @@ class C3(object):
         das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
 
         # --- Append Using's public_part (the chain) if applicable ---
-        if link == self.LINK_APPEND and action != self.MAKE_SELFSIGNED:
+        if link == LINK_APPEND and action != MAKE_SELFSIGNED:
             # we need to:
             # 1) strip using_public_part's public_part header,
             # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
-            # (we should test this)
             _, index = structure.expect_key_header([KEY_LIST_CERTS], b3.LIST, using_pub, 0)
-            # 1a) ensure the signing cert hasn't expired!  (This only works with link-append mode because link-name mode has no using_pub)
             using_pub = using_pub[index:]
             # 2) concat our data + using_public_part's data
             out_public_part = das_bytes_with_hdr + using_pub
@@ -425,7 +364,7 @@ class C3(object):
             out_public_part = das_bytes_with_hdr
 
         # --- Prepend a new overall public_part header & return pub & private bytes ---
-        if action == self.SIGN_PAYLOAD:
+        if action == SIGN_PAYLOAD:
             key_type = KEY_LIST_PAYLOAD
         else:
             key_type = KEY_LIST_CERTS
@@ -434,52 +373,59 @@ class C3(object):
         return out_public_with_hdr, new_key_priv
 
 
-    def ensure_not_expired(self, using_pub):
-        dx0 = structure.extract_first_dict(using_pub, CERT_SCHEMA)
-        expiry = dx0["expiry_date"]
-        if datetime.date.today() > expiry:
-            raise CertExpired("cert specified by --using has expired")
-        return True
+
+    # ============ Private key encryption / decryption  =============================================
+    # Policy: we keep these here at top level because they interact with the user (passwords)
+    #         and use a pass_protect object which needs startup initialisation (load libsodium)
+
+    # In:  private key bytes  (and possibly user entering a password interactively)
+    # Out: encrypted private key bytes
+
+    def encrypt_private_key(self, priv_bytes):
+        prompt1 = "Private  key encryption password: "
+        prompt2 = "Re-enter key encryption password: "
+        passw = getpassword.get_double_enter_setting_password(prompt1, prompt2)
+        if not passw:
+            raise ValueError("No password supplied, exiting")
+        epriv_bytes = self.pass_protect.SinglePassEncrypt(priv_bytes, passw)
+        return epriv_bytes
+
+    # In: dict from load_priv_block
+    # Out: private key bytes for make_sign to use
+
+    def decrypt_private_key(self, privd):
+        if privd.priv_type == PRIVTYPE_BARE:
+            return privd.priv_data
+        if privd.priv_type != PRIVTYPE_PASS_PROTECT:
+            raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.priv_type, KNOWN_PRIVTYPES))
+        if self.pass_protect.DualPasswordsNeeded(privd.priv_data):  # todo: we dont support this here yet
+            raise NotImplementedError("Private key wants dual passwords")
+
+        # --- Try password from environment variables ---
+        passw = getpassword.get_env_password()
+        if passw:
+            priv_ret = self.pass_protect.SinglePassDecrypt(privd.priv_data, passw)
+            # Note exceptions are propagated right out here, its an exit if this decrypt fails.
+            return priv_ret
+
+        # --- Try password from user ---
+        prompt = "Password to unlock private key: "
+        priv_ret = b""
+        while not priv_ret:
+            passw = getpassword.get_enter_password(prompt)
+            if not passw:
+                raise ValueError("No password supplied, exiting")
+
+            try:
+                priv_ret = self.pass_protect.SinglePassDecrypt(privd.priv_data, passw)
+            except Exception as e:
+                print("Failed decrypting private key: ", str(e))
+                continue        # let user try again
+        return priv_ret
+
 
 
 if __name__ == "__main__":
     CommandlineMain()
 
 
-
-# Making ULIDS
-
-# Courtesy of https://github.com/valohai/ulid2/blob/master/ulid2/__init__.py
-#
-# import time, calendar, struct
-# _last_entropy = None
-# _last_timestamp = None
-#
-# def generate_binary_ulid(timestamp=None, monotonic=False):
-#     """
-#     Generate the bytes for an ULID.
-#     :param timestamp: An optional timestamp override.
-#                       If `None`, the current time is used.
-#     :type timestamp: int|float|datetime.datetime|None
-#     :param monotonic: Attempt to ensure ULIDs are monotonically increasing.
-#                       Monotonic behavior is not guaranteed when used from multiple threads.
-#     :type monotonic: bool
-#     :return: Bytestring of length 16.
-#     :rtype: bytes
-#     """
-#     global _last_entropy, _last_timestamp
-#     if timestamp is None:
-#         timestamp = time.time()
-#     elif isinstance(timestamp, datetime.datetime):
-#         timestamp = calendar.timegm(timestamp.utctimetuple())
-#
-#     ts = int(timestamp * 1000.0)
-#     ts_bytes = struct.pack(b'!Q', ts)[2:]
-#     entropy = os.urandom(10)
-#     if monotonic and _last_timestamp == ts and _last_entropy is not None:
-#         while entropy < _last_entropy:
-#             entropy = os.urandom(10)
-#     _last_entropy = entropy
-#     _last_timestamp = ts
-#     return ts_bytes + entropy
-#

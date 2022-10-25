@@ -1,16 +1,29 @@
 
 import b3
 
-# --- Public structure stuff ---
+# --- API Actions ---
+
+# Make/Sign actions:
+MAKE_SELFSIGNED = 1
+MAKE_INTERMEDIATE = 2
+SIGN_PAYLOAD = 3
+
+LINK_APPEND = 1
+LINK_NAME = 2
+
+# --- Schemas and header tag values ---
 
 # Tag/Key values
 # Public-part top level
 KEY_LIST_PAYLOAD = 55  # cert chain with a payload as the first entry
 KEY_LIST_CERTS = 66   # cert chain with a cert as the first entry
+
 # Public-part chain-level
-KEY_DAS = 77
+KEY_DAS = 77            # "data_part and sig_part structure"
+
 # Private-part top level
 KEY_PRIV_CRCWRAPPED = 88       # "priv data with a crc32 integrity check"
+
 # Private-part field types
 PRIVTYPE_BARE = 1
 PRIVTYPE_PASS_PROTECT = 2
