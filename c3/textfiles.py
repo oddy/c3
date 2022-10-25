@@ -1,12 +1,13 @@
 
-import os, base64, re, functools, datetime
+# C3 private & public text-file format saving, loading & validation
 
+import os, base64, re, functools, datetime
 
 import b3
 
-import structure
-from constants import CERT_SCHEMA, PRIV_CRCWRAPPED
-from errors import StructureError, TamperError
+from c3 import structure
+from c3.constants import CERT_SCHEMA, PRIV_CRCWRAPPED
+from c3.errors import StructureError, TamperError
 
 # ============================== File Saving/Loading ===========================================
 
@@ -17,9 +18,9 @@ from errors import StructureError, TamperError
 def asc_header(msg):
     m2 = "[ %s ]" % msg
     offs = 37 - len(m2) // 2
-    line = "- " * offs
+    line = "-" * offs
     line += m2
-    line += "- " * (76 - len(line))
+    line += "-" * (76 - len(line))
     return line
 
 
@@ -130,7 +131,7 @@ def make_friendly_fields(block_part, schema, friendly_field_names):
 
     # --- Cross-check whether wanted fields exist (and map names to types) ---
     # This is because we're doing this with payloads as well as certs
-    # The rest of the C3 system is fully payload-agnostic but we aren't.
+    # The rest of the SignVerify system is fully payload-agnostic but we aren't.
     types_by_name = {}
     for typ, name in [i[:2] for i in schema]:
         if name in dx0 and name in friendly_field_names:

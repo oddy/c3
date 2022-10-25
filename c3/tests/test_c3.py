@@ -7,7 +7,7 @@ import pytest
 import b3
 import b3.hexdump
 
-from c3.c3main import C3
+from c3.commandline import SignVerify
 
 
 # test file saving/loading by round-tripping.
@@ -21,7 +21,7 @@ from c3.c3main import C3
 
 @pytest.fixture
 def c3m():
-    c3_obj = C3()
+    c3_obj = SignVerify()
     return c3_obj
 
 
@@ -58,7 +58,7 @@ def test_privkey_bare_integrity(c3m):
 
 
 def interactive_password_test():        # note: not a pytest test
-    c3m = c3main.C3()
+    c3m = c3main.SignVerify()
     bare_priv = b"hello world"
     print("- Encrypt & pack - ")
     priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv)
@@ -77,7 +77,7 @@ def interactive_password_test():        # note: not a pytest test
 
 
 # def files_save_load_test():         # note: not a pytest test. Reads/Writes disk.
-#    c3m = c3main.C3()
+#    c3m = c3main.SignVerify()
 
 
 
@@ -86,7 +86,7 @@ def interactive_password_test():        # note: not a pytest test
 
 # ======== Verify Tests ============================================================================
 
-# Made with:  python c3main.py make --name="root1" --using=self --expiry=2022-09-09
+# Made with:  python commandline.py make --name="root1" --using=self --expiry=2022-09-09
 root1 = """
 2UK6AelNtgEJAGUJAAVyb290MRkBBXJvb3QxOQIBAQkDQMg/+gyc/F3JZs4rY6ya5d9cPdWd6Sjs
 OD3UsENAitTCGrY0fceRKrndJKyXsVwOhwe2lUpmidVytXzAundMMWmpBAQJCcwfqQUEFgrMHwkB
@@ -408,7 +408,7 @@ def test_keypair_matching(c3m):
 # (And finding out exactly where to truncate public_part for the short-chain test above)
 
 def truncmain():
-    c3m = c3main.C3()
+    c3m = c3main.SignVerify()
     c3m.add_trusted_certs(root1_block)
     buf = public_part[:]
 
@@ -430,7 +430,7 @@ def truncmain():
 # glitch a byte anywhere? in the chain to trigger signature fails.
 
 def glitchmain():
-    c3m = c3main.C3()
+    c3m = c3main.SignVerify()
     c3m.add_trusted_certs(root1_block)
     buf = public_part[:]
 
@@ -453,7 +453,7 @@ def glitchmain():
         print("%4i   - SUCCESS -" % (i,))
 
 def smallrandfuzz():
-    c3m = c3main.C3()
+    c3m = c3main.SignVerify()
     z = {}
     i = 0
     while True:
@@ -475,7 +475,7 @@ def smallrandfuzz():
 # glitch a byte in the privkey block processing to ensure the decode integrity checks dont fail
 
 def bare_glitch_loop():
-    c3m = c3main.C3()
+    c3m = c3main.SignVerify()
     bare_priv = b"hello world"
     priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv, bare=True)
 

@@ -1,11 +1,9 @@
 
+# C3 password interactions with user and/or environment variables for private keys
+
 import sys, os
-import six
 
-# environment variables for priv key crypting
-PASS_VAR = "C3_PASSWORD"
-SHOW_VAR = "C3_SHOW_PASS"
-
+from c3.constants import PASS_VAR, SHOW_VAR
 
 if sys.platform == "win32":
     from msvcrt import getch  # noqa

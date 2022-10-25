@@ -1,4 +1,6 @@
 
+# This is used by C3 privcrypt, but is seperate and distinct code currently
+
 import sys, os, ctypes, itertools, logging, platform
 from   pathlib2 import Path
 

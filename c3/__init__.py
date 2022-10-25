@@ -1,5 +1,5 @@
 
-# C3 Public API
+# SignVerify Public API
 
 __version__ = "0.9.0"
 

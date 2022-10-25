@@ -1,4 +1,6 @@
 
+# C3 data schema for the binary blocks, tag constants, and API enums
+
 import b3
 
 # --- API Actions ---
@@ -10,6 +12,11 @@ SIGN_PAYLOAD = 3
 
 LINK_APPEND = 1
 LINK_NAME = 2
+
+# --- environment variables for priv key crypting ---
+PASS_VAR = "C3_PASSWORD"
+SHOW_VAR = "C3_SHOW_PASS"
+
 
 # --- Schemas and header tag values ---
 

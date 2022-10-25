@@ -1,10 +1,10 @@
 
+# C3 private & public binary block structure saving, loading & validation
+
 import copy, binascii, datetime
 
-import b3
-
-from constants import *
-from errors import StructureError, IntegrityError, CertExpired
+from c3.constants import *
+from c3.errors import StructureError, IntegrityError, CertExpired
 
 
 class AttrDict(dict):
@@ -49,7 +49,6 @@ def load_priv_block(block_bytes):
     if data_crc != privd.crc32:
         raise IntegrityError("Private key block failed data integrity check (crc32)")
     return privd
-
 
 
 # --- Public part loader ---
@@ -149,7 +148,7 @@ def expect_key_header(want_keys, want_type, buf, index):
     return key, index
 
 
-# This does not ensure mandatory fields are present like load() does, so it can be used for
+# This does not ensure mandatory fields are present like load_pub_block() does, so it can be used for
 # more things e.g. friendly_fields and check_expiry.
 
 def extract_first_dict(part_block, schema):
@@ -174,17 +173,8 @@ def ensure_not_expired(using_pub):
     return True
 
 
-# For error message readability
 
-def ctnm(das):
-    if not das:
-        return ""
-    if "cert" in das:
-        return " (cert %r) " % das.cert.cert_id
-    else:
-        return " (payload) "
-
-# Output/Results fetchers
+# --- Output/Results fetchers ---
 
 # In: chain from load()
 # Out: payload bytes
@@ -216,6 +206,18 @@ def get_meta(chain):
         del i["cert"]["public_key"]
         del i["sig"]["signature"]
     return chain2
+
+
+# For error message readability
+def ctnm(das):
+    if not das:
+        return ""
+    if "cert" in das:
+        return " (cert %r) " % das.cert.cert_id
+    else:
+        return " (payload) "
+
+# --------------------------------------------------------------------------------------------------
 
 
 # Making ULIDS

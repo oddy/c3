@@ -1,7 +1,6 @@
 
+# C3 errors / Exceptions
 
-
-# --- Errors ---
 class C3Error(ValueError):
     pass
 class StructureError(C3Error):  # something wrong with the data/binary structure; misparse, corrupt
