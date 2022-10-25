@@ -21,7 +21,7 @@ setup(
     name="c3sign",
     version=get_version("c3/__init__.py"),
     packages=find_packages(),
-    install_requires=["b3buf"],
+    install_requires=["b3buf", "ecdsa"],
     description="Compact Crypto Certs (C3) is a mini-PKI signer/verifier with full chain functionality and compact binary and friendly text cert formats",
     long_description=open(os.path.join(here, "README.md"), "r").read(),
     long_description_content_type="text/markdown",
