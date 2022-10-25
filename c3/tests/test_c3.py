@@ -4,19 +4,12 @@ import base64, traceback, random, os, datetime
 from pprint import pprint
 
 import pytest
-import b3
 import b3.hexdump
 
-from c3.commandline import SignVerify
-
-
-# test file saving/loading by round-tripping.
-
-
-# test verify by exercising each error outcome.
-
-# We're not testing ALL the StructureErrors right now, fuzz testing got a lot of them
-# put the fuzzing stuff here
+from c3.constants import *
+from c3.errors import *
+from c3.signverify import SignVerify
+from c3 import structure
 
 
 @pytest.fixture
@@ -30,35 +23,37 @@ def c3m():
 # bare (not encrypted) key roundtrip
 def test_privkey_bare(c3m):
     bare_priv = b"hello world"
-    priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv, bare=True)
-    privd = c3m.load_priv_block(priv_block_bytes)
-    assert privd.priv_type == c3main.PRIVTYPE_BARE
-    assert privd.key_type == c3main.KEYTYPE_ECDSA_256P
-    decrypted_priv = c3m.decrypt_private_key(privd)
+    priv_block_bytes = structure.make_priv_block(bare_priv, bare=True)
+    privd = structure.load_priv_block(priv_block_bytes)
+    assert privd.priv_type == PRIVTYPE_BARE
+    assert privd.key_type == KEYTYPE_ECDSA_256P
+    decrypted_priv = c3m.decrypt_private_key(privd)     # should pass bare through
     assert decrypted_priv == bare_priv
 
 # encrypted key roundtrip using an environment variable password
 def test_privkey_env_var(c3m):
     bare_priv = b"hello world"
     os.environ["C3_PASSWORD"] = "Password01!"
-    priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv)
-    privd = c3m.load_priv_block(priv_block_bytes)
-    assert privd.priv_type == c3main.PRIVTYPE_PASS_PROTECT
-    assert privd.key_type == c3main.KEYTYPE_ECDSA_256P
+    epriv = c3m.encrypt_private_key(bare_priv)
+    priv_block_bytes = structure.make_priv_block(epriv)   # bare=False is the default
+
+    privd = structure.load_priv_block(priv_block_bytes)
+    assert privd.priv_type == PRIVTYPE_PASS_PROTECT
+    assert privd.key_type == KEYTYPE_ECDSA_256P
     decrypted_priv = c3m.decrypt_private_key(privd)
     assert decrypted_priv == bare_priv
 
 # glitch a privkey byte to exercise the integrity check
 def test_privkey_bare_integrity(c3m):
     bare_priv = b"hello world"
-    priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv, bare=True)
+    priv_block_bytes = structure.make_priv_block(bare_priv, bare=True)
     priv_block_bytes = priv_block_bytes[:16] + b"a" + priv_block_bytes[17:]
-    with pytest.raises(c3main.IntegrityError):
-        c3m.load_priv_block(priv_block_bytes)
+    with pytest.raises(IntegrityError):
+        structure.load_priv_block(priv_block_bytes)
 
 
 def interactive_password_test():        # note: not a pytest test
-    c3m = c3main.SignVerify()
+    c3m = SignVerify()
     bare_priv = b"hello world"
     print("- Encrypt & pack - ")
     priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv)
@@ -77,7 +72,7 @@ def interactive_password_test():        # note: not a pytest test
 
 
 # def files_save_load_test():         # note: not a pytest test. Reads/Writes disk.
-#    c3m = c3main.SignVerify()
+#    c3m = SignVerify()
 
 
 
@@ -153,7 +148,7 @@ def test_get_payload_payload(c3m):
 # Glitch the payload contents so the signature fails to verify
 def test_verify_signature_fail(c3m):
     public_part_glitched = public_part[:100] + b"X" + public_part[101:]
-    with pytest.raises(c3main.InvalidSignatureError):
+    with pytest.raises(InvalidSignatureError):
         c3m.verify(c3m.load(public_part_glitched))
 
 
@@ -167,13 +162,13 @@ def test_verify_signature_fail(c3m):
 # Don't need root1 loaded because it doesn't get that far
 def test_verify_short_chain(c3m):
     public_part_without_inter2 = public_part[:115]
-    with pytest.raises(c3main.ShortChainError):
+    with pytest.raises(ShortChainError):
         c3m.verify(c3m.load(public_part_without_inter2))
 
 
 # Without loading root1 to trusted store first
 def test_verify_cert_not_found_error(c3m):
-    with pytest.raises(c3main.CertNotFoundError):
+    with pytest.raises(CertNotFoundError):
         c3m.verify(c3m.load(public_part))
 
 
@@ -193,22 +188,22 @@ CaZg7EyQf9QRsoUHiDNIrRpP8QkBBXJvb3Qx
 # a fully valid chain with a selfsign at the end, should still fail with UntrustedChainError
 def test_verify_untrusted_chain(c3m):
     public_part_selfsign_incl = base64.b64decode(payload_and_chain_with_root_selfsigned_included)
-    with pytest.raises(c3main.UntrustedChainError):
+    with pytest.raises(UntrustedChainError):
         c3m.verify(c3m.load(public_part_selfsign_incl))
 
 
 # ---- Test load error handling ----
 
 def test_load_empty(c3m):
-    with pytest.raises(c3main.StructureError):
+    with pytest.raises(StructureError):
         c3m.load(b"")
 
 def test_load_none(c3m):
-    with pytest.raises(c3main.StructureError):
+    with pytest.raises(StructureError):
         c3m.load(None)
 
 def test_load_nulls(c3m):
-    with pytest.raises(c3main.StructureError):
+    with pytest.raises(StructureError):
         c3m.load(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
 
@@ -217,7 +212,7 @@ def test_load_nulls(c3m):
 
 def test_make_friendly_fields(c3m):
     pub_part = base64.b64decode(root1)
-    lines_str = c3m.make_friendly_fields(pub_part, c3main.CERT_SCHEMA, ["subject_name", "expiry_date"])
+    lines_str = c3m.make_friendly_fields(pub_part, CERT_SCHEMA, ["subject_name", "expiry_date"])
     # print(repr(lines_str))
     assert lines_str == '[ Subject Name ]  root1\n[ Expiry Date  ]  9 September 2022'
 
@@ -238,30 +233,30 @@ this_part_should_be_ignored
 ff_root1_b64_block = base64.b64decode('\n'.join(ff_root1_pub_text.splitlines()[4:8]))
 
 def test_ff_check_happy_path(c3m):
-    ret = c3m.check_friendly_fields(ff_root1_pub_text, c3main.CERT_SCHEMA)
+    ret = c3m.check_friendly_fields(ff_root1_pub_text, CERT_SCHEMA)
     assert ret == ff_root1_b64_block
 
 def test_ff_busted_vertical_1(c3m):
     busted_vertical_structure = "\n\n".join(ff_root1_pub_text.splitlines())
-    with pytest.raises(c3main.StructureError, match="structure is invalid"):
-        c3m.check_friendly_fields(busted_vertical_structure, c3main.CERT_SCHEMA)
+    with pytest.raises(StructureError, match="structure is invalid"):
+        c3m.check_friendly_fields(busted_vertical_structure, CERT_SCHEMA)
 
 def test_ff_bad_field(c3m):
     bad_ff = ff_root1_pub_text.replace("Date  ]", "Date]")
-    with pytest.raises(c3main.TamperError, match="format for visible"):
-        c3m.check_friendly_fields(bad_ff, c3main.CERT_SCHEMA)
+    with pytest.raises(TamperError, match="format for visible"):
+        c3m.check_friendly_fields(bad_ff, CERT_SCHEMA)
 
 def test_ff_spurious_field(c3m):
     spurious_field = "[ Spurious Field ]  Hello world"
     bad_ff = ff_root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
-    with pytest.raises(c3main.TamperError, match="not present in the secure area"):
-        c3m.check_friendly_fields(bad_ff, c3main.CERT_SCHEMA)
+    with pytest.raises(TamperError, match="not present in the secure area"):
+        c3m.check_friendly_fields(bad_ff, CERT_SCHEMA)
 
 def test_ff_field_value_mismatch(c3m):
     spurious_field = "[ Subject Name ]  Harold"
     bad_ff = ff_root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
-    with pytest.raises(c3main.TamperError, match="does not match secure"):
-        c3m.check_friendly_fields(bad_ff, c3main.CERT_SCHEMA)
+    with pytest.raises(TamperError, match="does not match secure"):
+        c3m.check_friendly_fields(bad_ff, CERT_SCHEMA)
 
 
 
@@ -345,7 +340,7 @@ def test_make_inter_append_expired_root(c3m):
     # Root cert
     root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir_root)
     c3m.add_trusted_certs(root_pub)
-    with pytest.raises(c3main.CertExpired):
+    with pytest.raises(CertExpired):
         c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_priv=root_priv, expiry=expir)
 
 
@@ -369,7 +364,7 @@ def test_sign_rootcert_namecollide(c3m):
     # evil chain
     inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=evil_pub, using_priv=evil_priv, expiry=expir)
     chain = c3m.load(inter_pub)
-    with pytest.raises(c3main.InvalidSignatureError):
+    with pytest.raises(InvalidSignatureError):
         ret = c3m.verify(chain)
 
 
@@ -396,7 +391,7 @@ def test_keypair_matching(c3m):
     r1_pub, r1_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root1", expiry=expir)
     r2_pub, r2_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root1", expiry=expir)  # note simulating same name error
 
-    with pytest.raises(c3main.SignError, match="key do not match"):
+    with pytest.raises(SignError, match="key do not match"):
         c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter2", using_pub=r1_pub,
                       using_name="root1", using_priv=r2_priv, expiry=expir,
                       link=c3m.LINK_NAME)
@@ -408,7 +403,7 @@ def test_keypair_matching(c3m):
 # (And finding out exactly where to truncate public_part for the short-chain test above)
 
 def truncmain():
-    c3m = c3main.SignVerify()
+    c3m = SignVerify()
     c3m.add_trusted_certs(root1_block)
     buf = public_part[:]
 
@@ -430,7 +425,7 @@ def truncmain():
 # glitch a byte anywhere? in the chain to trigger signature fails.
 
 def glitchmain():
-    c3m = c3main.SignVerify()
+    c3m = SignVerify()
     c3m.add_trusted_certs(root1_block)
     buf = public_part[:]
 
@@ -453,7 +448,7 @@ def glitchmain():
         print("%4i   - SUCCESS -" % (i,))
 
 def smallrandfuzz():
-    c3m = c3main.SignVerify()
+    c3m = SignVerify()
     z = {}
     i = 0
     while True:
@@ -475,7 +470,7 @@ def smallrandfuzz():
 # glitch a byte in the privkey block processing to ensure the decode integrity checks dont fail
 
 def bare_glitch_loop():
-    c3m = c3main.SignVerify()
+    c3m = SignVerify()
     bare_priv = b"hello world"
     priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv, bare=True)
 

@@ -114,8 +114,14 @@ def load_files(name):
     pub_block = check_friendly_fields(pub_text_block, CERT_SCHEMA)
     priv_block = check_friendly_fields(priv_text_block, PRIV_CRCWRAPPED)
 
-
     return pub_block, priv_block
+
+# Like load_files but if the public block part is a string. (e.g. cert stored in code)
+
+def pub_block_from_string(pub_text_block):
+    pub_block = check_friendly_fields(pub_text_block, CERT_SCHEMA)
+    return pub_block
+
 
 
 # ============================== Friendly Fields ===============================================

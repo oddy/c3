@@ -11,7 +11,7 @@ from c3.constants import *
 from c3 import signverify
 from c3 import structure
 from c3 import textfiles
-from c3 import privcrypt
+
 
 b3.composite_schema.strict_mode = True
 
@@ -23,6 +23,16 @@ b3.composite_schema.strict_mode = True
 # * Clean up password prompts and commandline UX
 # * improve expiry date parsing
 # * Do build to pypi, 0.9.0
+
+# Use cases:
+# * Make license (sign),  verify license
+# * Make acmd key, make (sign) acmd message, verify acmd message
+# * make build key [nocode], sign build manifest [nocode], verify build manifest  [signverify]
+
+
+# need to do __init__.py  and have an external test code.
+# For signing things, and verifying things.
+
 
 # [DO THIS DURING LICENSING]  - so e.g. licensing gets its own friendly fields.
 
@@ -38,17 +48,15 @@ def CommandlineMain(zargs=None):
     print("Checking Function args received (for entry point testing): ",repr(zargs))
     if zargs is None:
         zargs = sys.argv[1:]
-
-    if len(sys.argv) < 2:
+    if len(zargs) < 1:
         UsageBail()
-    cmd = sys.argv[1].lower()
-    args = ArgvArgs()
+    cmd = zargs[0].lower()
+    args = ArgvArgs(zargs)
 
     c3m = signverify.SignVerify()
-    privcr = privcrypt.PrivCrypt()
 
-    # python commandline.py  make --name=root1 --using=self  --parts=split
-    # python commandline.py  make --name=inter1 --using=root1 --link=name --parts=combine
+    # python commandline.py  make --name=root1 --using=self  --parts=split --expiry=2022-02-02
+    # python commandline.py  make --name=inter1 --using=root1 --link=name --parts=combine --expiry=2022-02-02
 
     if cmd == "make":
         if "using" not in args:
@@ -64,7 +72,7 @@ def CommandlineMain(zargs=None):
                 return
 
             upub, uepriv = textfiles.load_files(args.using)         # uses files
-            upriv = privcr.decrypt_private_key(structure.load_priv_block(uepriv))  # (might) ask user for password
+            upriv = c3m.decrypt_private_key(structure.load_priv_block(uepriv))  # (might) ask user for password
             link = {"append" : LINK_APPEND, "name" : LINK_NAME}[args.link]
 
             pub_block, priv = c3m.make_sign(action=MAKE_INTERMEDIATE, name=args.name, expiry=expiry,
@@ -73,7 +81,7 @@ def CommandlineMain(zargs=None):
         bare = "nopassword" in args  # Note: has to be --nopassword=blah for now.
         if not bare:
             print("Setting password on private key-")
-            epriv = privcr.encrypt_private_key(priv)
+            epriv = c3m.encrypt_private_key(priv)
         else:
             epriv = priv
         epriv_block = structure.make_priv_block(epriv, bare)
@@ -97,7 +105,7 @@ def CommandlineMain(zargs=None):
         payload_bytes = open(args.payload, "rb").read()
 
         upub, uepriv = textfiles.load_files(args.using)  # uses files
-        upriv = privcr.decrypt_private_key(structure.load_priv_block(uepriv))  # (might) ask user for password
+        upriv = c3m.decrypt_private_key(structure.load_priv_block(uepriv))  # (might) ask user for password
         link = {"append": LINK_APPEND, "name": LINK_NAME}[args.link]
 
         pub, priv = c3m.make_sign(action=SIGN_PAYLOAD, name=args.name, payload=payload_bytes,
@@ -135,6 +143,7 @@ def CommandlineMain(zargs=None):
     UsageBail("Unknown command")
 
 
+
 def ParseExpiryDate(exp_str):
     exp_d = datetime.datetime.strptime(exp_str, "%Y-%m-%d").date()
     # Put some intelligent regex matches here so we can decode a few of the most common date formats
@@ -154,9 +163,9 @@ def UsageBail(msg=""):
     sys.exit(1)
 
 
-def ArgvArgs():
+def ArgvArgs(zargs):
     args = structure.AttrDict()
-    for arg in sys.argv:
+    for arg in zargs:
         z = re.match(r"^--(\w+)=(.+)$", arg)
         if z:
             k, v = z.groups()
