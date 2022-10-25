@@ -139,6 +139,8 @@ class SignVerify(object):
                 public_key=new_key_pub, subject_name=name, cert_id=cert_id, issued_date=today,
                 key_type=KEYTYPE_ECDSA_256P, expiry_date=expiry
             )
+            from pprint import pprint
+            pprint(new_pub_cert)
             new_pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, new_pub_cert)
             payload_bytes = new_pub_cert_bytes
         # --- Load payload if not key-genning ---

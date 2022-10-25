@@ -2,6 +2,7 @@
 # C3 data schema for the binary blocks, tag constants, and API enums
 
 import b3
+b3.composite_schema.strict_mode = True
 
 # --- API Actions ---
 

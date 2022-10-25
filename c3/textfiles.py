@@ -170,7 +170,7 @@ def make_friendly_fields(block_part, schema, friendly_field_names):
 
     # --- Make stuff line up nicely ---
     longest_name_len = functools.reduce(max, [len(i[0]) for i in line_items], 0)
-    lines = ["[ %s ]  %s" % (str.ljust(fname, longest_name_len), fval) for fname, fval in
+    lines = ["[ %s ]  %s" % (fname.ljust(longest_name_len), fval) for fname, fval in
              line_items]
     return '\n'.join(lines)
 

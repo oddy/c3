@@ -1,4 +1,5 @@
 
+from __future__ import unicode_literals     # for python2
 
 import base64, traceback, random, os, datetime
 from pprint import pprint
@@ -281,7 +282,7 @@ def test_make_selfsigned(c3m):
     # make a selfsigned then verify it and check the cert name == the sig name
     expiry = datetime.date(2023, 9, 9)
 
-    pub_part_bytes, priv_part_bytes = c3m.make_sign(action=MAKE_SELFSIGNED, name="test1", expiry=expiry)
+    pub_part_bytes, priv_part_bytes = c3m.make_sign(action=MAKE_SELFSIGNED, name=u"test1", expiry=expiry)
     c3m.add_trusted_certs(pub_part_bytes)
 
     chain = structure.load_pub_block(pub_part_bytes)

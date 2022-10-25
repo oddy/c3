@@ -1,7 +1,8 @@
 
-# SignVerify Public API
+# Compact Crypto Certs (C3) Public API
 
 __version__ = "0.9.0"
+
 
 from c3.constants import *
 from c3.errors import *
@@ -19,4 +20,9 @@ __all__ = [
     "pub_block_from_string",
     "SignVerify"
 ]
+
+
+# Future todos:
+# - py2 support (b3 utf8, base64 encodebytes, more?)
+# - more key types e.g. libsodium
 

@@ -13,8 +13,6 @@ from c3 import structure
 from c3 import textfiles
 
 
-b3.composite_schema.strict_mode = True
-
 # Policy: Be as janky with this stuff as we want right now, we're not doing a public release,
 #         just making the UX not suck too bad for us. This means click is out, --nopassword=yes is ok.
 # Policy: For simplicity for now, the subject names and cert_ids are the same. Later there should be ULIDs.
