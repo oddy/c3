@@ -10,6 +10,7 @@ from c3.constants import *
 from c3.errors import *
 from c3.signverify import SignVerify
 from c3 import structure
+from c3 import textfiles
 
 
 @pytest.fixture
@@ -51,31 +52,26 @@ def test_privkey_bare_integrity(c3m):
     with pytest.raises(IntegrityError):
         structure.load_priv_block(priv_block_bytes)
 
+# Run me from TOP top level with: "python -m c3.tests.test_c3"
 
 def interactive_password_test():        # note: not a pytest test
     c3m = SignVerify()
     bare_priv = b"hello world"
     print("- Encrypt & pack - ")
-    priv_block_bytes = c3m.make_encrypt_private_key_block(bare_priv)
+    epriv = c3m.encrypt_private_key(bare_priv)
+    priv_block_bytes = structure.make_priv_block(epriv)
     if not priv_block_bytes:        # or exception?
         print(" - user abort -")
         return
     print("- load & decrypt - ")
     print(repr(priv_block_bytes))
 
-    pd = c3m.load_priv_block(priv_block_bytes)
+    pd = structure.load_priv_block(priv_block_bytes)
     de_priv = c3m.decrypt_private_key(pd)
     if de_priv == bare_priv:
         print("SUCCESS - roundtripped key matches original")
     else:
         print("FAIL - roundtripped key does not match original")
-
-
-# def files_save_load_test():         # note: not a pytest test. Reads/Writes disk.
-#    c3m = SignVerify()
-
-
-
 
 
 
@@ -109,36 +105,35 @@ def test_add_trusted_root1(c3m):
 # Happy path
 def test_verify_success_ext_root1(c3m):
     c3m.add_trusted_certs(root1_block)
-    chain = c3m.load(public_part)
-    ret = c3m.verify(c3m.load(public_part))
-    assert ret == True
+    ret = c3m.verify(structure.load_pub_block(public_part))
+    assert ret is True
 
 # payload extractor & meta-data chain maker
 
 def test_get_meta_root1(c3m):
-    chain = c3m.load(root1_block)
+    chain = structure.load_pub_block(root1_block)
     assert chain[0].cert.cert_id == b"root1"
     assert chain[0].sig.signing_cert_id == b"root1"
     # Meta is just chain without all the big-bytesy things so it's nicer to pprint()
-    meta = c3m.get_meta(chain)
+    meta = structure.get_meta(chain)
     assert meta[0].cert.cert_id == b"root1"
     assert meta[0].sig.signing_cert_id == b"root1"
 
 def test_get_meta_payload(c3m):
-    chain = c3m.load(public_part)
-    meta = c3m.get_meta(chain)
+    chain = structure.load_pub_block(public_part)
+    meta = structure.get_meta(chain)
     assert len(meta) == 1
     assert meta[0].cert.cert_id == b"inter2"
     assert meta[0].sig.signing_cert_id == b"root1"
 
 def test_get_payload_root1(c3m):
-    chain = c3m.load(root1_block)
-    payload = c3m.get_payload(chain)
+    chain = structure.load_pub_block(root1_block)
+    payload = structure.get_payload(chain)
     assert payload == b""
 
 def test_get_payload_payload(c3m):
-    chain = c3m.load(public_part)
-    payload = c3m.get_payload(chain)
+    chain = structure.load_pub_block(public_part)
+    payload = structure.get_payload(chain)
     assert payload == plaintext_payload
 
 
@@ -149,7 +144,7 @@ def test_get_payload_payload(c3m):
 def test_verify_signature_fail(c3m):
     public_part_glitched = public_part[:100] + b"X" + public_part[101:]
     with pytest.raises(InvalidSignatureError):
-        c3m.verify(c3m.load(public_part_glitched))
+        c3m.verify(structure.load_pub_block(public_part_glitched))
 
 
 # Apart from actual signature fails, there are 3 ways for this to fail:
@@ -163,13 +158,13 @@ def test_verify_signature_fail(c3m):
 def test_verify_short_chain(c3m):
     public_part_without_inter2 = public_part[:115]
     with pytest.raises(ShortChainError):
-        c3m.verify(c3m.load(public_part_without_inter2))
+        c3m.verify(structure.load_pub_block(public_part_without_inter2))
 
 
 # Without loading root1 to trusted store first
 def test_verify_cert_not_found_error(c3m):
     with pytest.raises(CertNotFoundError):
-        c3m.verify(c3m.load(public_part))
+        c3m.verify(structure.load_pub_block(public_part))
 
 
 
@@ -189,22 +184,22 @@ CaZg7EyQf9QRsoUHiDNIrRpP8QkBBXJvb3Qx
 def test_verify_untrusted_chain(c3m):
     public_part_selfsign_incl = base64.b64decode(payload_and_chain_with_root_selfsigned_included)
     with pytest.raises(UntrustedChainError):
-        c3m.verify(c3m.load(public_part_selfsign_incl))
+        c3m.verify(structure.load_pub_block(public_part_selfsign_incl))
 
 
 # ---- Test load error handling ----
 
 def test_load_empty(c3m):
     with pytest.raises(StructureError):
-        c3m.load(b"")
+        structure.load_pub_block(b"")
 
 def test_load_none(c3m):
     with pytest.raises(StructureError):
-        c3m.load(None)
+        structure.load_pub_block(None)
 
 def test_load_nulls(c3m):
     with pytest.raises(StructureError):
-        c3m.load(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+        structure.load_pub_block(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
 
 # ======== Friendly Fields Tests ===================================================================
@@ -212,7 +207,7 @@ def test_load_nulls(c3m):
 
 def test_make_friendly_fields(c3m):
     pub_part = base64.b64decode(root1)
-    lines_str = c3m.make_friendly_fields(pub_part, CERT_SCHEMA, ["subject_name", "expiry_date"])
+    lines_str = textfiles.make_friendly_fields(pub_part, CERT_SCHEMA, ["subject_name", "expiry_date"])
     # print(repr(lines_str))
     assert lines_str == '[ Subject Name ]  root1\n[ Expiry Date  ]  9 September 2022'
 
@@ -233,30 +228,30 @@ this_part_should_be_ignored
 ff_root1_b64_block = base64.b64decode('\n'.join(ff_root1_pub_text.splitlines()[4:8]))
 
 def test_ff_check_happy_path(c3m):
-    ret = c3m.check_friendly_fields(ff_root1_pub_text, CERT_SCHEMA)
+    ret = textfiles.check_friendly_fields(ff_root1_pub_text, CERT_SCHEMA)
     assert ret == ff_root1_b64_block
 
 def test_ff_busted_vertical_1(c3m):
     busted_vertical_structure = "\n\n".join(ff_root1_pub_text.splitlines())
     with pytest.raises(StructureError, match="structure is invalid"):
-        c3m.check_friendly_fields(busted_vertical_structure, CERT_SCHEMA)
+        textfiles.check_friendly_fields(busted_vertical_structure, CERT_SCHEMA)
 
 def test_ff_bad_field(c3m):
     bad_ff = ff_root1_pub_text.replace("Date  ]", "Date]")
     with pytest.raises(TamperError, match="format for visible"):
-        c3m.check_friendly_fields(bad_ff, CERT_SCHEMA)
+        textfiles.check_friendly_fields(bad_ff, CERT_SCHEMA)
 
 def test_ff_spurious_field(c3m):
     spurious_field = "[ Spurious Field ]  Hello world"
     bad_ff = ff_root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
     with pytest.raises(TamperError, match="not present in the secure area"):
-        c3m.check_friendly_fields(bad_ff, CERT_SCHEMA)
+        textfiles.check_friendly_fields(bad_ff, CERT_SCHEMA)
 
 def test_ff_field_value_mismatch(c3m):
     spurious_field = "[ Subject Name ]  Harold"
     bad_ff = ff_root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
     with pytest.raises(TamperError, match="does not match secure"):
-        c3m.check_friendly_fields(bad_ff, CERT_SCHEMA)
+        textfiles.check_friendly_fields(bad_ff, CERT_SCHEMA)
 
 
 
@@ -286,10 +281,10 @@ def test_make_selfsigned(c3m):
     # make a selfsigned then verify it and check the cert name == the sig name
     expiry = datetime.date(2023, 9, 9)
 
-    pub_part_bytes, priv_part_bytes = c3m.make_sign(action=c3m.MAKE_SELFSIGNED, name="test1", expiry=expiry)
+    pub_part_bytes, priv_part_bytes = c3m.make_sign(action=MAKE_SELFSIGNED, name="test1", expiry=expiry)
     c3m.add_trusted_certs(pub_part_bytes)
 
-    chain = c3m.load(pub_part_bytes)
+    chain = structure.load_pub_block(pub_part_bytes)
     ret = c3m.verify(chain)
     assert ret is True      # no payload, successful verify
     assert chain[0].cert.cert_id == chain[0].sig.signing_cert_id    # self-signed
@@ -297,25 +292,25 @@ def test_make_selfsigned(c3m):
 
 def test_make_supply_neither_inval(c3m):
     with pytest.raises(ValueError):
-        inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9")
+        inter_pub, inter_priv = c3m.make_sign(MAKE_INTERMEDIATE, name="inter9")
 
 
 def test_make_supply_both_inval(c3m):
     with pytest.raises(ValueError):
-        inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=b"a", using_name="root9")
+        inter_pub, inter_priv = c3m.make_sign(MAKE_INTERMEDIATE, name="inter9", using_pub=b"a", using_name="root9")
         # Note it doen't get to needing the missing using_priv or expiry
 
 
 def test_make_inter_name(c3m):
     expir = datetime.date(2023, 9, 9)
     # Root cert
-    root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
+    root_pub, root_priv = c3m.make_sign(MAKE_SELFSIGNED, name="root9", expiry=expir)
     c3m.add_trusted_certs(root_pub)
 
-    inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_priv=root_priv, expiry=expir,
-                                          using_pub=root_pub, using_name="root9", link=c3m.LINK_NAME)
+    inter_pub, inter_priv = c3m.make_sign(MAKE_INTERMEDIATE, name="inter9", using_priv=root_priv, expiry=expir,
+                                          using_pub=root_pub, using_name="root9", link=LINK_NAME)
 
-    chain = c3m.load(inter_pub)
+    chain = structure.load_pub_block(inter_pub)
     ret = c3m.verify(chain)
     assert ret is True      # no payload, successful verify
 
@@ -323,13 +318,13 @@ def test_make_inter_name(c3m):
 def test_make_inter_append(c3m):
     expir = datetime.date(2023, 9, 9)
     # Root cert
-    root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
+    root_pub, root_priv = c3m.make_sign(MAKE_SELFSIGNED, name="root9", expiry=expir)
     c3m.add_trusted_certs(root_pub)
 
-    inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_priv=root_priv, expiry=expir,
-                                          using_pub=root_pub, using_name="root9", link=c3m.LINK_APPEND)
+    inter_pub, inter_priv = c3m.make_sign(MAKE_INTERMEDIATE, name="inter9", using_priv=root_priv, expiry=expir,
+                                          using_pub=root_pub, using_name="root9", link=LINK_APPEND)
 
-    chain = c3m.load(inter_pub)
+    chain = structure.load_pub_block(inter_pub)
     ret = c3m.verify(chain)
     assert ret is True      # no payload, successful verify
 
@@ -338,10 +333,10 @@ def test_make_inter_append_expired_root(c3m):
     expir_root = datetime.date(2021, 9, 9)
     expir = datetime.date(2023, 9, 9)
     # Root cert
-    root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir_root)
+    root_pub, root_priv = c3m.make_sign(MAKE_SELFSIGNED, name="root9", expiry=expir_root)
     c3m.add_trusted_certs(root_pub)
     with pytest.raises(CertExpired):
-        c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_priv=root_priv, expiry=expir)
+        c3m.make_sign(MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_priv=root_priv, expiry=expir)
 
 
 # Note that this doesn't fail, even though we are *appending* the root9 cert itself into the chain
@@ -357,13 +352,13 @@ def test_make_inter_append_expired_root(c3m):
 def test_sign_rootcert_namecollide(c3m):
     expir = datetime.date(2023, 9, 9)
     # Legit guy
-    root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root5", expiry=expir)
+    root_pub, root_priv = c3m.make_sign(MAKE_SELFSIGNED, name="root5", expiry=expir)
     c3m.add_trusted_certs(root_pub)
     # Attacker guy
-    evil_pub, evil_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root5", expiry=expir)   # NOTE same name
+    evil_pub, evil_priv = c3m.make_sign(MAKE_SELFSIGNED, name="root5", expiry=expir)   # NOTE same name
     # evil chain
-    inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=evil_pub, using_priv=evil_priv, expiry=expir)
-    chain = c3m.load(inter_pub)
+    inter_pub, inter_priv = c3m.make_sign(MAKE_INTERMEDIATE, name="inter9", using_pub=evil_pub, using_priv=evil_priv, expiry=expir)
+    chain = structure.load_pub_block(inter_pub)
     with pytest.raises(InvalidSignatureError):
         ret = c3m.verify(chain)
 
@@ -371,15 +366,15 @@ def test_sign_rootcert_namecollide(c3m):
 
 def test_sign_payload(c3m):
     expir = datetime.date(2023, 9, 9)
-    root_pub, root_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root9", expiry=expir)
+    root_pub, root_priv = c3m.make_sign(MAKE_SELFSIGNED, name="root9", expiry=expir)
 
-    inter_pub, inter_priv = c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_name="root9", using_priv=root_priv, expiry=expir, link=c3m.LINK_NAME)
+    inter_pub, inter_priv = c3m.make_sign(MAKE_INTERMEDIATE, name="inter9", using_pub=root_pub, using_name="root9", using_priv=root_priv, expiry=expir, link=LINK_NAME)
 
     payload = b"How are you gentlemen"
-    signed_payload, should_be_none = c3m.make_sign(c3m.SIGN_PAYLOAD, payload=payload, using_pub=inter_pub, using_priv=inter_priv)
+    signed_payload, should_be_none = c3m.make_sign(SIGN_PAYLOAD, payload=payload, using_pub=inter_pub, using_priv=inter_priv)
     assert should_be_none is None
 
-    chain = c3m.load(signed_payload)
+    chain = structure.load_pub_block(signed_payload)
     c3m.add_trusted_certs(root_pub)
     verify_ok = c3m.verify(chain)
     assert verify_ok is True
@@ -388,13 +383,13 @@ def test_sign_payload(c3m):
 
 def test_keypair_matching(c3m):
     expir = datetime.date(2023, 9, 9)
-    r1_pub, r1_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root1", expiry=expir)
-    r2_pub, r2_priv = c3m.make_sign(c3m.MAKE_SELFSIGNED, name="root1", expiry=expir)  # note simulating same name error
+    r1_pub, r1_priv = c3m.make_sign(MAKE_SELFSIGNED, name="root1", expiry=expir)
+    r2_pub, r2_priv = c3m.make_sign(MAKE_SELFSIGNED, name="root1", expiry=expir)  # note simulating same name error
 
     with pytest.raises(SignError, match="key do not match"):
-        c3m.make_sign(c3m.MAKE_INTERMEDIATE, name="inter2", using_pub=r1_pub,
+        c3m.make_sign(MAKE_INTERMEDIATE, name="inter2", using_pub=r1_pub,
                       using_name="root1", using_priv=r2_priv, expiry=expir,
-                      link=c3m.LINK_NAME)
+                      link=LINK_NAME)
 
 
 # ---- Truncate and glitch loops -----
