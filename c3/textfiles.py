@@ -24,34 +24,34 @@ def asc_header(msg):
     line += "-" * (76 - len(line))
     return line
 
-
-def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_ff_lines="", priv_ff_lines=""):
+def make_pub_txt_str(public_part, name="", desc="", pub_ff_lines=""):
     pub_desc = desc if desc else (name + " - Payload & Public Certs")
-    priv_desc = (desc or name) + " - PRIVATE Key"
     if pub_ff_lines:
         pub_ff_lines += "\n"
     pub_str = asc_header(pub_desc) + "\n" + pub_ff_lines + base64.encodebytes \
         (public_part).decode()
+    return pub_str
+
+
+def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_ff_lines="", priv_ff_lines=""):
+    pub_str = make_pub_txt_str(public_part, name, desc, pub_ff_lines)
+    priv_desc = (desc or name) + " - PRIVATE Key"
     if priv_ff_lines:
         priv_ff_lines += "\n"
     priv_str = asc_header(priv_desc) + "\n" + priv_ff_lines + base64.encodebytes \
         (private_part).decode()
 
-    print()
-    print(pub_str)
-    print()
-    print(priv_str)
     if combine:
         fname = name + ".b64.txt"
         with open(fname, "w") as f:
-            f.write("\n " +pub_str)
+            f.write("\n" +pub_str)
             f.write("\n")
             f.write(priv_str + "\n")
         print("Wrote combined file: " ,fname)
     else:
         fname = name + ".public.b64.txt"
         with open(fname, "w") as f:
-            f.write("\n " + pub_str + "\n")
+            f.write("\n" + pub_str + "\n")
         print("Wrote public file:  ", fname)
 
         if not private_part:
@@ -59,7 +59,7 @@ def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_
 
         fname = name + ".PRIVATE.b64.txt"
         with open(fname, "w") as f:
-            f.write("\n " + priv_str + "\n")
+            f.write("\n" + priv_str + "\n")
         print("Wrote PRIVATE file: ", fname)
 
 
