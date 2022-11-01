@@ -152,17 +152,15 @@ def expect_key_header(want_keys, want_type, buf, index):
 # more things e.g. friendly_fields and check_expiry.
 
 def extract_first_dict(part_block, schema):
-    if schema == CERT_SCHEMA:       # public part block
+    if schema == PRIV_CRCWRAPPED:  # private part block
+        ppkey, index = expect_key_header([KEY_PRIV_CRCWRAPPED, ], b3.DICT, part_block, 0)
+        private_part = part_block[index:]
+        dx0 = AttrDict(b3.schema_unpack(schema, private_part))
+    else:           # public part block, using CERT_SCHEMA or a caller's SCHEMA
         ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, part_block, 0)
         public_part = part_block[index:]
         das0 = list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
         dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
-    elif schema == PRIV_CRCWRAPPED:    # private part block
-        ppkey, index = expect_key_header([KEY_PRIV_CRCWRAPPED,], b3.DICT, part_block, 0)
-        private_part = part_block[index:]
-        dx0 = AttrDict(b3.schema_unpack(schema, private_part))
-    else:
-        raise TypeError("Unknown schema for first-dict extract")
     return dx0
 
 def ensure_not_expired(using_pub):
