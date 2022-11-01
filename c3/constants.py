@@ -67,7 +67,7 @@ PRIV_CRCWRAPPED = (
     (b3.UVARINT, "priv_type", 0, True),      # protection method (e.g. bare/none, or pass_protect)
     (b3.UVARINT, "key_type",  1, True),      # actual type of private key (e.g. ecdsa 256p)
     (b3.BYTES,   "priv_data", 2, True),
-    (b3.UVARINT, "crc32",    3, True),       # crc of privdata for integrity check
+    (b3.UVARINT, "crc32",     3, True),       # crc of privdata for integrity check
 )
 
 

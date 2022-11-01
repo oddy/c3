@@ -4,6 +4,7 @@
 import os, base64, re, functools, datetime
 
 import b3
+from jedi.parser_utils import cut_value_at_position
 
 from c3 import structure
 from c3.constants import CERT_SCHEMA, PRIV_CRCWRAPPED
@@ -123,24 +124,38 @@ def pub_block_from_string(pub_text_block):
     return pub_block
 
 
-
 # ============================== Friendly Fields ===============================================
 
 # In: block_part bytes, schema for first dict, field names to output in friendly format
 # Out: field names & values as text lines (or exceptions)
 
-def make_friendly_fields(block_part, schema, friendly_field_names):
+# field_names is a list but the members can be 2-tuples mapping dict_key to friendly_name
+# if the member is just a string then it is name.title().replace("_"," ")'ed.
+
+def make_friendly_fields(block_part, schema, field_names):
     # --- get to that first dict ---
     # Assume standard pub_bytes structure (chain with header)
     # We can't use load() here because load() does mandatory schema checks and we
     dx0 = structure.extract_first_dict(block_part, schema)
+    key_names = []
+    key_to_friendly = {}
+
+    # --- field_names may have some friendly-name overrides in it ---
+    for fn in field_names:
+        if isinstance(fn, (tuple, list)):       # (key_name,friendly_name) map item
+            key_name, friendly_name = fn
+        else:
+            key_name = fn                       # just the key name
+            friendly_name = fn.title().replace("_", " ")
+        key_names.append(key_name)
+        key_to_friendly[key_name] = friendly_name
 
     # --- Cross-check whether wanted fields exist (and map names to types) ---
     # This is because we're doing this with payloads as well as certs
     # The rest of the SignVerify system is fully payload-agnostic but we aren't.
     types_by_name = {}
     for typ, name in [i[:2] for i in schema]:
-        if name in dx0 and name in friendly_field_names:
+        if name in dx0 and name in key_names:
             types_by_name[name] = typ
     if not types_by_name:
         raise ValueError("No wanted friendly fields found in the secure block")
@@ -149,10 +164,10 @@ def make_friendly_fields(block_part, schema, friendly_field_names):
     # --- Convert wanted fields to a textual representation where possible ---
     # order by the friendly_field_names parameter
     line_items = []
-    for name in friendly_field_names:
+    for name in key_names:
         if name not in types_by_name:
             continue
-        fname = name.title().replace("_" ," ")
+        fname = key_to_friendly[name]
         typ = types_by_name[name]
         val = dx0[name]     # in
         fval = ""   # out
@@ -184,7 +199,10 @@ def make_friendly_fields(block_part, schema, friendly_field_names):
 #   This means EOF immediately after the base64 block is an error.
 
 
-def check_friendly_fields(text_part, schema):
+# custom_names is currently a dict - sort of the inverse of make's field_names BUT, its a dict and
+# only the custom overrides need be present. {friendly_name:key_name}
+
+def check_friendly_fields(text_part, schema, custom_names=None):
     types_by_name = {i[1]: i[0] for i in schema}
     # --- Ensure vertical structure is legit ---
     # 1 or no header line (-), immediately followed by 0 or more FF lines ([),
@@ -212,10 +230,12 @@ def check_friendly_fields(text_part, schema):
             raise TamperError("Invalid format for visible field line %r" % ff[:32])
         fname, fval = fX.groups()
 
-        # --- convert name ---
-        # spaces aren't allowed in code schema field names because AttrDict, only underscores so
-        # 1:1 conversion back is easy.
-        name = fname.strip().lower().replace(" ", "_")
+        # --- default convert name ---
+        fname = fname.strip()
+        name = fname.lower().replace(" ", "_")
+        # --- custom-override convert name ---
+        if isinstance(custom_names, dict) and fname in custom_names:
+            name = custom_names[fname]
         fval = fval.strip()  # some converters are finicky about trailing spaces
 
         # --- Check name presence ---

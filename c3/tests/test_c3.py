@@ -206,11 +206,17 @@ def test_load_nulls(c3m):
 # ======== Friendly Fields Tests ===================================================================
 
 
-def test_make_friendly_fields(c3m):
+def test_make_friendly_fields_list(c3m):
     pub_part = base64.b64decode(root1)
-    lines_str = textfiles.make_friendly_fields(pub_part, CERT_SCHEMA, ["subject_name", "expiry_date"])
-    # print(repr(lines_str))
+    field_names = ["subject_name", "expiry_date"]
+    lines_str = textfiles.make_friendly_fields(pub_part, CERT_SCHEMA, field_names)
     assert lines_str == '[ Subject Name ]  root1\n[ Expiry Date  ]  9 September 2022'
+
+def test_make_friendly_fields_map(c3m):
+    pub_part = base64.b64decode(root1)
+    field_names = [("subject_name", "Subject Name 2"), "expiry_date"]
+    lines_str = textfiles.make_friendly_fields(pub_part, CERT_SCHEMA, field_names)
+    assert lines_str == '[ Subject Name 2 ]  root1\n[ Expiry Date    ]  9 September 2022'
 
 
 
@@ -255,8 +261,22 @@ def test_ff_field_value_mismatch(c3m):
         textfiles.check_friendly_fields(bad_ff, CERT_SCHEMA)
 
 
+ff_root1_with_customs = """
+--------------------[ root1 - Payload & Public Certs ]----------------------
+[ Subject Name 2  ]  root1
+[ Expiry Date XXX ]  9 September 2022
+2UK6AelNtgEJAGUJAAVyb290MRkBBXJvb3QxOQIBAQkDQMg/+gyc/F3JZs4rY6ya5d9cPdWd6Sjs
+OD3UsENAitTCGrY0fceRKrndJKyXsVwOhwe2lUpmidVytXzAundMMWmpBAQJCcwfqQUEFgrMHwkB
+SwkAQOe/rz9mLoBLLRCpFEr+emsHEvcH73vZislzpwqBHxD+tV23QFmTMjsJzKsPOQmmYOxMkH/U
+EbKFB4gzSK0aT/EJAQVyb290MQ==
 
-# todo: friendly fields tests.
+this_part_should_be_ignored
+"""
+
+def test_ff_check_happy_path_custom(c3m):
+    custom_map = {"Subject Name 2" : "subject_name", "Expiry Date XXX" : "expiry_date"}
+    ret = textfiles.check_friendly_fields(ff_root1_with_customs, CERT_SCHEMA, custom_map)
+    assert ret == ff_root1_b64_block
 
 
 
