@@ -1,7 +1,7 @@
 
 # Compact Crypto Certs (C3) Public API
 
-__version__ = "0.9.3a1"
+__version__ = "0.9.3a2"
 
 
 from c3.constants import *
