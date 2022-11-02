@@ -206,10 +206,11 @@ def check_friendly_fields(text_part, schema, custom_names=None):
     types_by_name = {i[1]: i[0] for i in schema}
     # --- Ensure vertical structure is legit ---
     # 1 or no header line (-), immediately followed by 0 or more FF lines ([),
-    # immediately followd by base64 then a mandatory whitespace (e.g empty line).
+    # immediately followd by base64 then: a mandatory whitespace (e.g empty line)
+    # (or a line starting with a -)
     lines = text_part.splitlines()
     c0s = ''.join([line[0] if line else ' ' for line in lines]) + ' '
-    X = re.match(r"^\s*(-?)(\[*)([a-zA-Z0-9/=+]+) ", c0s)
+    X = re.match(r"^\s*(-?)(\[*)([a-zA-Z0-9/=+]+)[ \-]", c0s)
     if not X:
         raise StructureError("File text vertical structure is invalid")
     ff_lines = lines[X.start(2): X.end(2)]  # extract FF lines
