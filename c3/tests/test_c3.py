@@ -206,15 +206,15 @@ def test_load_nulls(c3m):
 # ======== Friendly Fields Tests ===================================================================
 
 
-def test_make_friendly_fields_list(c3m):
+def test_make_ff_list(c3m):
     pub_part = base64.b64decode(root1)
-    field_names = ["subject_name", "expiry_date"]
+    field_names = ("subject_name", "expiry_date")
     lines_str = textfiles.make_friendly_fields(pub_part, CERT_SCHEMA, field_names)
     assert lines_str == '[ Subject Name ]  root1\n[ Expiry Date  ]  9 September 2022'
 
-def test_make_friendly_fields_map(c3m):
+def test_make_ff_map(c3m):
     pub_part = base64.b64decode(root1)
-    field_names = [("subject_name", "Subject Name 2"), "expiry_date"]
+    field_names = (("subject_name", "Subject Name 2"), "expiry_date")
     lines_str = textfiles.make_friendly_fields(pub_part, CERT_SCHEMA, field_names)
     assert lines_str == '[ Subject Name 2 ]  root1\n[ Expiry Date    ]  9 September 2022'
 
@@ -274,7 +274,8 @@ this_part_should_be_ignored
 """
 
 def test_ff_check_happy_path_custom(c3m):
-    custom_map = {"Subject Name 2" : "subject_name", "Expiry Date XXX" : "expiry_date"}
+    # custom_map = [["subject_name", "Subject Name 2"], ["expiry_date", "Expiry Date XXX"]]
+    custom_map = (("subject_name", "Subject Name 2"), ("expiry_date", "Expiry Date XXX"))
     ret = textfiles.check_friendly_fields(ff_root1_with_customs, CERT_SCHEMA, custom_map)
     assert ret == ff_root1_b64_block
 

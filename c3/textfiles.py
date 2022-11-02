@@ -118,27 +118,26 @@ def load_files(name):
     return pub_block, priv_block
 
 # Like load_files but if the public block part is a string. (e.g. cert stored in code)
+# Note: users can pass in their own schema, for check friendly fields to run on their stuff.
 
-def pub_block_from_string(pub_text_block):
-    pub_block = check_friendly_fields(pub_text_block, CERT_SCHEMA)
+def pub_block_from_string(pub_text_block, schema=CERT_SCHEMA, field_map=None):
+    pub_block = check_friendly_fields(pub_text_block, schema, field_map)
     return pub_block
 
 
 # ============================== Friendly Fields ===============================================
 
-# In: block_part bytes, schema for first dict, field names to output in friendly format
-# Out: field names & values as text lines (or exceptions)
+# In:  field_names is a list but the members can be 2-tuples mapping dict_key to friendly_name
+#  e.g ["org", "Organization"], "hostnames", ["typ", "License Type"], "issued_date", ["expires", "Expiry Date"]
+#      if the member is just a string then it is name.title().replace("_"," ")'ed.
+# Out: key_names list, key_to_friendly dict, friendly_to_key dict
 
-# field_names is a list but the members can be 2-tuples mapping dict_key to friendly_name
-# if the member is just a string then it is name.title().replace("_"," ")'ed.
-
-def make_friendly_fields(block_part, schema, field_names):
-    # --- get to that first dict ---
-    # Assume standard pub_bytes structure (chain with header)
-    # We can't use load() here because load() does mandatory schema checks and we
-    dx0 = structure.extract_first_dict(block_part, schema)
+def map_field_names(field_names):
+    if not field_names:
+        field_names = []            # normalise if supplied None
     key_names = []
     key_to_friendly = {}
+    friendly_to_key = {}
 
     # --- field_names may have some friendly-name overrides in it ---
     for fn in field_names:
@@ -149,6 +148,22 @@ def make_friendly_fields(block_part, schema, field_names):
             friendly_name = fn.title().replace("_", " ")
         key_names.append(key_name)
         key_to_friendly[key_name] = friendly_name
+        friendly_to_key[friendly_name] = key_name
+
+    return key_names, key_to_friendly, friendly_to_key
+
+
+# In: block_part bytes, schema for first dict, field names to output in friendly format
+# Out: field names & values as text lines (or exceptions)
+
+# field_names isn't optional because we wouldn't be here if we weren't making friendly fields
+
+def make_friendly_fields(block_part, schema, field_names):
+    # --- get to that first dict ---
+    # Assume standard pub_bytes structure (chain with header)
+    # We can't use load() here because load() does mandatory schema checks and we
+    dx0 = structure.extract_first_dict(block_part, schema)
+    key_names, key_to_friendly, _ = map_field_names(field_names)
 
     # --- Cross-check whether wanted fields exist (and map names to types) ---
     # This is because we're doing this with payloads as well as certs
@@ -199,11 +214,15 @@ def make_friendly_fields(block_part, schema, field_names):
 #   This means EOF immediately after the base64 block is an error.
 
 
-# custom_names is currently a dict - sort of the inverse of make's field_names BUT, its a dict and
-# only the custom overrides need be present. {friendly_name:key_name}
+# field_names IS optional because there might be no overrides and we might just be checking against
+# schema with
 
-def check_friendly_fields(text_part, schema, custom_names=None):
+def check_friendly_fields(text_part, schema, field_names=None):
     types_by_name = {i[1]: i[0] for i in schema}
+
+    # --- Get user-custom mappings if any ---
+    _, _, friendly_to_key = map_field_names(field_names)
+
     # --- Ensure vertical structure is legit ---
     # 1 or no header line (-), immediately followed by 0 or more FF lines ([),
     # immediately followd by base64 then: a mandatory whitespace (e.g empty line)
@@ -235,8 +254,8 @@ def check_friendly_fields(text_part, schema, custom_names=None):
         fname = fname.strip()
         name = fname.lower().replace(" ", "_")
         # --- custom-override convert name ---
-        if isinstance(custom_names, dict) and fname in custom_names:
-            name = custom_names[fname]
+        if fname in friendly_to_key:
+            name = friendly_to_key[fname]
         fval = fval.strip()  # some converters are finicky about trailing spaces
 
         # --- Check name presence ---
