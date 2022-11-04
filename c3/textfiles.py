@@ -68,6 +68,8 @@ def load_files(name):
     header_rex = r"^-+\[ (.*?) \]-+$"
     pub_text_block = ""
     priv_text_block = ""
+    pub_block = b""
+    priv_block = b""
 
     combine_name = name + ".b64.txt"
     if os.path.isfile(combine_name):
@@ -112,8 +114,15 @@ def load_files(name):
 
     # Ensure friendly (visible) text-fields (if any) match the secure binary info.
     # This also extracts and converts the base64 secure block parts.
-    pub_block = check_friendly_fields(pub_text_block, CERT_SCHEMA)
-    priv_block = check_friendly_fields(priv_text_block, PRIV_CRCWRAPPED)
+    if pub_text_block:
+        print("load_files checking pub_block ")
+        print(repr(pub_text_block))
+        pub_block = check_friendly_fields(pub_text_block, CERT_SCHEMA)
+
+    if priv_text_block:
+        print("load_files checking priv_block")
+        print(repr(priv_text_block))
+        priv_block = check_friendly_fields(priv_text_block, PRIV_CRCWRAPPED)
 
     return pub_block, priv_block
 

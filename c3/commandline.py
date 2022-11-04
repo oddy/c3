@@ -147,7 +147,7 @@ def CommandlineMain(zargs=None):
 MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 
 def ParseBasicDate(txt):
-    m = re.match(r"^(\d{2,4})[\.\- /](\w{2,9})[\.\- /](\d{2,4})$", txt)
+    m = re.match(r"^(\d{1,4})[\.\- /](\w{1,9})[\.\- /](\d{1,4})$", txt)
     if not m:
         raise ValueError('Date format is invalid. (Ok formats: 23.2.2022 2022-04-04 "15 oct 2022")')
 
