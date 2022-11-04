@@ -4,7 +4,6 @@
 import os, base64, re, functools, datetime
 
 import b3
-from jedi.parser_utils import cut_value_at_position
 
 from c3 import structure
 from c3.constants import CERT_SCHEMA, PRIV_CRCWRAPPED
