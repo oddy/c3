@@ -2,7 +2,10 @@
 # This is used by C3 privcrypt, but is seperate and distinct code currently
 
 import sys, os, ctypes, itertools, logging, platform
-from   pathlib import Path
+try:
+    from pathlib import Path
+except ImportError:
+    from pathlib2 import Path
 
 from b3 import encode_uvarint, decode_uvarint
 

@@ -9,6 +9,11 @@ from c3 import structure
 from c3.constants import CERT_SCHEMA, PRIV_CRCWRAPPED
 from c3.errors import StructureError, TamperError
 
+try:
+    b64_encode = base64.encodebytes
+except AttributeError:                  # py2
+    b64_encode = base64.encodestring    # py2
+
 # ============================== File Saving/Loading ===========================================
 
 # Policy: look for name.PRIVATE and name.PUBLIC (.b64.txt)
@@ -27,8 +32,7 @@ def make_pub_txt_str(public_part, name="", desc="", pub_ff_lines=""):
     pub_desc = desc if desc else (name + " - Payload & Public Certs")
     if pub_ff_lines:
         pub_ff_lines += "\n"
-    pub_str = asc_header(pub_desc) + "\n" + pub_ff_lines + base64.encodebytes \
-        (public_part).decode()
+    pub_str = asc_header(pub_desc) + "\n" + pub_ff_lines + b64_encode(public_part).decode()
     return pub_str
 
 
@@ -37,8 +41,7 @@ def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_
     priv_desc = (desc or name) + " - PRIVATE Key"
     if priv_ff_lines:
         priv_ff_lines += "\n"
-    priv_str = asc_header(priv_desc) + "\n" + priv_ff_lines + base64.encodebytes \
-        (private_part).decode()
+    priv_str = asc_header(priv_desc) + "\n" + priv_ff_lines + b64_encode(private_part).decode()
 
     if combine:
         fname = name + ".b64.txt"
@@ -60,6 +63,7 @@ def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_
         with open(fname, "w") as f:
             f.write("\n" + priv_str + "\n")
         print("Wrote PRIVATE file: ", fname)
+
 
 
 

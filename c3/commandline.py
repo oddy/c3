@@ -157,11 +157,11 @@ def ParseBasicDate(txt):
         try:
             mon = MONTHS.index(smon[:3].lower()) + 1
         except ValueError:
-            raise ValueError(f"Invalid month name '{smon[:3]}'") from None
+            raise ValueError("Invalid month name '%s'" % (smon[:3],))  # from None  # backcompat put this back in when we drop py2
     else:
         mon = int(smon)
     if mon < 1 or mon > 12:
-        raise ValueError(f"month {mon} not in range 1-12")
+        raise ValueError("month %d not in range 1-12" % (mon,))
 
     # --- Day and Year ---
     g1 = m.group(1)
@@ -184,7 +184,7 @@ def UsageBail(msg=""):
     help_txt = """
     %s
     Usage:
-    # python commandline.py  make --name=root1 --using=self  --parts=split
+    # python commandline.py  make --name=root1 --using=self  --parts=split --expiry=2022-oct-20
     # python commandline.py  make --name=inter1 --using=root1 --link=name --parts=combine   
 
     """ % (msg+"\n",)

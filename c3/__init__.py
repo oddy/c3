@@ -1,7 +1,7 @@
 
 # Compact Crypto Certs (C3) Public API
 
-__version__ = "0.9.4a1"
+__version__ = "0.9.4"
 
 
 from c3.constants import *
@@ -24,6 +24,5 @@ __all__ = [
 
 # Future todos:
 # - CSR workflow, creating a cert with --using=None
-# - py2 support (b3 utf8, base64 encodebytes, p_p pathlib2, more?)
 # - more key types e.g. libsodium
 
