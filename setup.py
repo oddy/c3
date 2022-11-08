@@ -31,18 +31,12 @@ setup(
     license="MIT",
     classifiers=[
         "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3",
         "Development Status :: 4 - Beta",
     ],
     include_package_data=True,
-    data_files=[
-        (
-            "",
-            [
-                "LICENSE.txt",
-            ],
-        )
-    ],
+    data_files=[ ("", ["LICENSE.txt",],) ],
     # we want a universal wheel
     options={"bdist_wheel": {"universal": True}},
 )

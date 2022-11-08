@@ -32,7 +32,7 @@ from c3 import textfiles
 # For signing things, and verifying things.
 
 
-# [DO THIS DURING LICENSING]  - so e.g. licensing gets its own friendly fields.
+# [DO THIS DURING LICENSING]  - so e.g. licensing gets its own visible fields.
 
 
 #               |     no payload             payload
@@ -89,7 +89,7 @@ def CommandlineMain(zargs=None):
             combine = False
 
         pub_ff_names = ["subject_name", "expiry_date", "issued_date"]
-        pub_ffields = textfiles.make_friendly_fields(pub_block, CERT_SCHEMA, pub_ff_names)
+        pub_ffields = textfiles.make_visible_fields(pub_block, CERT_SCHEMA, pub_ff_names)
 
         textfiles.write_files(args.name, pub_block, epriv_block, combine, pub_ff_lines=pub_ffields)
         return
@@ -110,9 +110,9 @@ def CommandlineMain(zargs=None):
                                   using_priv=upriv, using_pub=upub, link=link)
 
         # pub_ff_names = ["whatever", "app_specific", "fields_app_schema_has"]
-        # pub_ffields = c3m.make_friendly_fields(pub, APP_SCHEMA, pub_ff_names)
+        # pub_ffields = c3m.make_visible_fields(pub, APP_SCHEMA, pub_ff_names)
         textfiles.write_files(args.payload, pub, b"", combine=False)   #, pub_ff_lines=pub_ffields))
-        # Note: ^^ no private part, so no combine.         ^^^ how to friendly-fields for app
+        # Note: ^^ no private part, so no combine.         ^^^ how to visible-fields for app
         return
 
     # python commandline.py  verify --name=payload.txt --trusted=root1

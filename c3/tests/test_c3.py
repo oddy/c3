@@ -203,19 +203,19 @@ def test_load_nulls(c3m):
         structure.load_pub_block(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
 
-# ======== Friendly Fields Tests ===================================================================
+# ======== visible Fields Tests ===================================================================
 
 
 def test_make_ff_list(c3m):
     pub_part = base64.b64decode(root1)
     field_names = ("subject_name", "expiry_date")
-    lines_str = textfiles.make_friendly_fields(pub_part, CERT_SCHEMA, field_names)
+    lines_str = textfiles.make_visible_fields(pub_part, CERT_SCHEMA, field_names)
     assert lines_str == '[ Subject Name ]  root1\n[ Expiry Date  ]  9 September 2022'
 
 def test_make_ff_map(c3m):
     pub_part = base64.b64decode(root1)
     field_names = (("subject_name", "Subject Name 2"), "expiry_date")
-    lines_str = textfiles.make_friendly_fields(pub_part, CERT_SCHEMA, field_names)
+    lines_str = textfiles.make_visible_fields(pub_part, CERT_SCHEMA, field_names)
     assert lines_str == '[ Subject Name 2 ]  root1\n[ Expiry Date    ]  9 September 2022'
 
 
@@ -235,30 +235,30 @@ this_part_should_be_ignored
 ff_root1_b64_block = base64.b64decode('\n'.join(ff_root1_pub_text.splitlines()[4:8]))
 
 def test_ff_check_happy_path(c3m):
-    ret = textfiles.check_friendly_fields(ff_root1_pub_text, CERT_SCHEMA)
+    ret = textfiles.text_to_binary_block(ff_root1_pub_text, CERT_SCHEMA)
     assert ret == ff_root1_b64_block
 
 def test_ff_busted_vertical_1(c3m):
     busted_vertical_structure = "\n\n".join(ff_root1_pub_text.splitlines())
     with pytest.raises(StructureError, match="structure is invalid"):
-        textfiles.check_friendly_fields(busted_vertical_structure, CERT_SCHEMA)
+        textfiles.text_to_binary_block(busted_vertical_structure, CERT_SCHEMA)
 
 def test_ff_bad_field(c3m):
     bad_ff = ff_root1_pub_text.replace("Date  ]", "Date]")
     with pytest.raises(TamperError, match="format for visible"):
-        textfiles.check_friendly_fields(bad_ff, CERT_SCHEMA)
+        textfiles.text_to_binary_block(bad_ff, CERT_SCHEMA)
 
 def test_ff_spurious_field(c3m):
     spurious_field = "[ Spurious Field ]  Hello world"
     bad_ff = ff_root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
     with pytest.raises(TamperError, match="not present in the secure area"):
-        textfiles.check_friendly_fields(bad_ff, CERT_SCHEMA)
+        textfiles.text_to_binary_block(bad_ff, CERT_SCHEMA)
 
 def test_ff_field_value_mismatch(c3m):
     spurious_field = "[ Subject Name ]  Harold"
     bad_ff = ff_root1_pub_text.replace("[ Subject Name ]  root1", spurious_field)
     with pytest.raises(TamperError, match="does not match secure"):
-        textfiles.check_friendly_fields(bad_ff, CERT_SCHEMA)
+        textfiles.text_to_binary_block(bad_ff, CERT_SCHEMA)
 
 
 ff_root1_with_customs = """
@@ -276,7 +276,7 @@ this_part_should_be_ignored
 def test_ff_check_happy_path_custom(c3m):
     # custom_map = [["subject_name", "Subject Name 2"], ["expiry_date", "Expiry Date XXX"]]
     custom_map = (("subject_name", "Subject Name 2"), ("expiry_date", "Expiry Date XXX"))
-    ret = textfiles.check_friendly_fields(ff_root1_with_customs, CERT_SCHEMA, custom_map)
+    ret = textfiles.text_to_binary_block(ff_root1_with_customs, CERT_SCHEMA, custom_map)
     assert ret == ff_root1_b64_block
 
 
@@ -526,7 +526,7 @@ if __name__ == '__main__':
 #     for i in range(0,255):
 #         buf = six.int2byte(i) #+ b"\x0f\x55\x55"
 #         try:
-#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, buf, 0)
+#             ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, buf, 0)
 #             print("%4i %02x - SUCCESS - key = %r" % (i,i, ppkey))
 #         except Exception as e:
 #             print("%4i %02x -  %s" % (i,i, e))
@@ -539,7 +539,7 @@ if __name__ == '__main__':
 #         i += 1
 #         buf = random.randbytes(20)
 #         try:
-#             ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, buf, 0)
+#             ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, buf, 0)
 #             out = "SUCCESS - key = %r" % ppkey
 #         except Exception as e:
 #             out = "%r" % e

@@ -6,7 +6,7 @@ import os, base64, re, functools, datetime
 import b3
 
 from c3 import structure
-from c3.constants import CERT_SCHEMA, PRIV_CRCWRAPPED
+from c3.constants import CERT_SCHEMA, PRIV_CRCWRAP_SCHEMA
 from c3.errors import StructureError, TamperError
 
 try:
@@ -66,41 +66,66 @@ def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_
 
 
 
-
-def load_files(name):
+def split_text_pub_priv(text_in):
+    # regex cap the header lines
     header_rex = r"^-+\[ (.*?) \]-+$"
+    hdrs = list(re.finditer(header_rex, text_in, re.MULTILINE))
+    num_hdrs = len(hdrs)
     pub_text_block = ""
     priv_text_block = ""
-    pub_block = b""
-    priv_block = b""
+
+    if num_hdrs not in (1,2):
+        raise ValueError("Text needs to have 1 or 2 ---[Headers]--- present")
+
+    if num_hdrs == 2:
+        # structure_check wants to see the headers too if they are there.
+        block0_text = text_in[hdrs[0].start(): hdrs[1].start()]
+        block1_text = text_in[hdrs[1].start():]
+
+        # normally the second block is the private block, but if a user has shuffled things around
+        # we cater for that by checking which block has 'PRIVATE' in its header description
+        if "PRIVATE" in hdrs[0].group(1):  # Private block comes first (not the normal case)
+            pub_text_block, priv_text_block = block1_text, block0_text
+        else:  # Otherwise assume the public block comes first.
+            pub_text_block, priv_text_block = block0_text, block1_text
+    else:                   # 1 header, its either one or the other but not both
+        if "PRIVATE" in hdrs[0].group(1):
+            priv_text_block = text_in
+        else:
+            pub_text_block = text_in
+
+    return pub_text_block, priv_text_block
+
+
+
+
+
+# So we do the header checks like before, to try and keep public private and combined consistent
+# But then we glue things together if need be and return a single combined always,
+# because the uniloader then processes the text, does splitting, etc later
+# (Because it may and does often get called with text strings directly).
+
+# Policy: both members of split do not have to exist. (often pub no priv)
+# Policy: combined and split are mutually exclusive, should raise an error.
+
+def load_files2(name):
+    header_rex = r"^-+\[ (.*?) \]-+$"
+    both_text_block = ""
+    pub_text_block = ""
+    priv_text_block = ""
 
     combine_name = name + ".b64.txt"
     if os.path.isfile(combine_name):
         print("Loading combined file ", combine_name)
-        both_strs = open(combine_name, "r").read()
-
-        # regex cap the header lines
-        hdrs = list(re.finditer(header_rex, both_strs, re.MULTILINE))
+        both_text_block = open(combine_name, "r").read()
+        hdrs = list(re.finditer(header_rex, both_text_block, re.MULTILINE))
         if len(hdrs) != 2:
-            print(" Warning: number of headers in combined file is not 2")
-
-        # Structure: first header, first data, second header, second data, end of file
-        # data offsets are start-of-first-header : start-of-second-header,
-        # because check_friendly_fields wants to see the headers too if they are there.
-        block0_text = both_strs[hdrs[0].start() : hdrs[1].start()]
-        block1_text = both_strs[hdrs[1].start( ):]
-
-        # normally the second block is the private block, but if a user has shuffled things around
-        # we cater for that by checking which block has 'PRIVATE' in its header description
-        if "PRIVATE" in hdrs[0].group(1):       # Private block comes first (not the normal case)
-            pub_text_block, priv_text_block = block1_text, block0_text
-        else:   # Otherwise assume the public block comes first.
-            pub_text_block, priv_text_block = block0_text, block1_text
-
-    # Enable more-specific files to override the combined file, if both exist
+            raise ValueError("Number of headers in combined file is not 2")
 
     pub_only_name = name + ".public.b64.txt"
     if os.path.isfile(pub_only_name):
+        if both_text_block:
+            raise ValueError("Both combined and public-only files exist, please remove one")
         print("Loading public file ", pub_only_name)
         pub_text_block = open(pub_only_name, "r").read()
         hdrs = list(re.finditer(header_rex, pub_text_block, re.MULTILINE))
@@ -109,73 +134,66 @@ def load_files(name):
 
     priv_only_name = name + ".PRIVATE.b64.txt"
     if os.path.isfile(priv_only_name):
+        if both_text_block:
+            raise ValueError("Both combined and public-only files exist, please remove one")
         print("Loading private file ", priv_only_name)
         priv_text_block = open(priv_only_name, "r").read()
         hdrs = list(re.finditer(header_rex, priv_text_block, re.MULTILINE))
         if len(hdrs) != 1:
             print(" Warning: too %s headers in public file" % ("many" if len(hdrs) > 1 else "few"))
 
-    # Ensure friendly (visible) text-fields (if any) match the secure binary info.
-    # This also extracts and converts the base64 secure block parts.
-    if pub_text_block:
-        print("load_files checking pub_block ")
-        print(repr(pub_text_block))
-        pub_block = check_friendly_fields(pub_text_block, CERT_SCHEMA)
+    if not both_text_block:
+        both_text_block = pub_text_block + "\n\n" + priv_text_block
+    return both_text_block
 
-    if priv_text_block:
-        print("load_files checking priv_block")
-        print(repr(priv_text_block))
-        priv_block = check_friendly_fields(priv_text_block, PRIV_CRCWRAPPED)
-
-    return pub_block, priv_block
 
 # Like load_files but if the public block part is a string. (e.g. cert stored in code)
-# Note: users can pass in their own schema, for check friendly fields to run on their stuff.
+# Note: users can pass in their own schema, for check visible fields to run on their stuff.
 
 def pub_block_from_string(pub_text_block, schema=CERT_SCHEMA, field_map=None):
-    pub_block = check_friendly_fields(pub_text_block, schema, field_map)
+    pub_block = text_to_binary_block(pub_text_block, schema, field_map)
     return pub_block
 
 
-# ============================== Friendly Fields ===============================================
+# ============================== visible Fields ===============================================
 
-# In:  field_names is a list but the members can be 2-tuples mapping dict_key to friendly_name
+# In:  field_names is a list but the members can be 2-tuples mapping dict_key to visible_name
 #  e.g ["org", "Organization"], "hostnames", ["typ", "License Type"], "issued_date", ["expires", "Expiry Date"]
 #      if the member is just a string then it is name.title().replace("_"," ")'ed.
-# Out: key_names list, key_to_friendly dict, friendly_to_key dict
+# Out: key_names list, key_to_visible dict, visible_to_key dict
 
 def map_field_names(field_names):
     if not field_names:
         field_names = []            # normalise if supplied None
     key_names = []
-    key_to_friendly = {}
-    friendly_to_key = {}
+    key_to_visible = {}
+    visible_to_key = {}
 
-    # --- field_names may have some friendly-name overrides in it ---
+    # --- field_names may have some visible-name overrides in it ---
     for fn in field_names:
-        if isinstance(fn, (tuple, list)):       # (key_name,friendly_name) map item
-            key_name, friendly_name = fn
+        if isinstance(fn, (tuple, list)):       # (key_name,visible_name) map item
+            key_name, visible_name = fn
         else:
             key_name = fn                       # just the key name
-            friendly_name = fn.title().replace("_", " ")
+            visible_name = fn.title().replace("_", " ")
         key_names.append(key_name)
-        key_to_friendly[key_name] = friendly_name
-        friendly_to_key[friendly_name] = key_name
+        key_to_visible[key_name] = visible_name
+        visible_to_key[visible_name] = key_name
 
-    return key_names, key_to_friendly, friendly_to_key
+    return key_names, key_to_visible, visible_to_key
 
 
-# In: block_part bytes, schema for first dict, field names to output in friendly format
+# In: block_part bytes, schema for first dict, field names to output in visible format
 # Out: field names & values as text lines (or exceptions)
 
-# field_names isn't optional because we wouldn't be here if we weren't making friendly fields
+# field_names isn't optional because we wouldn't be here if we weren't making visible fields
 
-def make_friendly_fields(block_part, schema, field_names):
+def make_visible_fields(block_part, schema, field_names):
     # --- get to that first dict ---
     # Assume standard pub_bytes structure (chain with header)
     # We can't use load() here because load() does mandatory schema checks and we
     dx0 = structure.extract_first_dict(block_part, schema)
-    key_names, key_to_friendly, _ = map_field_names(field_names)
+    key_names, key_to_visible, _ = map_field_names(field_names)
 
     # --- Cross-check whether wanted fields exist (and map names to types) ---
     # This is because we're doing this with payloads as well as certs
@@ -185,16 +203,16 @@ def make_friendly_fields(block_part, schema, field_names):
         if name in dx0 and name in key_names:
             types_by_name[name] = typ
     if not types_by_name:
-        raise ValueError("No wanted friendly fields found in the secure block")
+        raise ValueError("No wanted visible fields found in the secure block")
         # note: should this just be a warning & continue?
 
     # --- Convert wanted fields to a textual representation where possible ---
-    # order by the friendly_field_names parameter
+    # order by the visible_field_names parameter
     line_items = []
     for name in key_names:
         if name not in types_by_name:
             continue
-        fname = key_to_friendly[name]
+        fname = key_to_visible[name]
         typ = types_by_name[name]
         val = dx0[name]     # in
         fval = ""   # out
@@ -217,26 +235,23 @@ def make_friendly_fields(block_part, schema, field_names):
     return '\n'.join(lines)
 
 
-# Note: unlike make_friendly_fields, we raise exceptions when something is wrong
-# In: text with header line, friendly-fields lines, followed by the base64 of the secure public or private block.
+
+# Note: unlike make_visible_fields, we raise exceptions when something is wrong
+# In: text cert or cert-like test (header, vis-fields, base64 block), optional vis fields schema & map
 # Out: exceptions or True.
 # We're pretty strict compared to make, any deviations at all will raise an exception.
 #   This includes spurious fields, etc.
-# We expect there to be an empty line (or end of file) after the base64 block, and NOT more stuff.
-#   This means EOF immediately after the base64 block is an error.
 
+# This does 2 jobs, which unfortunately are somewhat intertwined:
+# 1) validate textual structure & extract the base64 part & convert it to binary
+# 2) Tamper-cross-check the Visible Fields (if any) with their binary block counterparts.
 
-# field_names IS optional because there might be no overrides and we might just be checking against
-# schema with
+# Policy: if no vis_map schema assume CERT_SCHEMA.
+# Todo: PRIV_CRCWRAP_SCHEMA etc - peek bytes_part's tag & select schema from that.
 
-def check_friendly_fields(text_part, schema, field_names=None):
-    types_by_name = {i[1]: i[0] for i in schema}
-
-    # --- Get user-custom mappings if any ---
-    _, _, friendly_to_key = map_field_names(field_names)
-
+def text_to_binary_block(text_part, vis_map=None):
     # --- Ensure vertical structure is legit ---
-    # 1 or no header line (-), immediately followed by 0 or more FF lines ([),
+    # 1 or no header line (-), immediately followed by 0 or more VF lines ([),
     # immediately followd by base64 then: a mandatory whitespace (e.g empty line)
     # (or a line starting with a -)
     lines = text_part.splitlines()
@@ -244,10 +259,21 @@ def check_friendly_fields(text_part, schema, field_names=None):
     X = re.match(r"^\s*(-?)(\[*)([a-zA-Z0-9/=+]+)[ \-]", c0s)
     if not X:
         raise StructureError("File text vertical structure is invalid")
-    ff_lines = lines[X.start(2): X.end(2)]  # extract FF lines
+    vf_lines = lines[X.start(2): X.end(2)]  # extract FF lines
     b64_lines = lines[X.start(3): X.end(3)]  # extract base64 lines
     b64_block = ''.join(b64_lines)
     bytes_part = base64.b64decode(b64_block)
+
+    if not vf_lines:            # No visual-fields, we're done
+        return bytes_part
+
+    # --- Check Visible/Text Fields ----
+    if vis_map and "schema" in vis_map and vis_map["schema"]:
+        schema = vis_map["schema"]
+    else:
+        schema = CERT_SCHEMA
+    types_by_name = {i[1]: i[0] for i in schema}
+    _, _, visible_to_key = map_field_names(vis_map["fields_map"])
 
     # --- get to that first dict in the secure block ---
     # Assume standard pub_bytes structure (chain with header)
@@ -255,8 +281,8 @@ def check_friendly_fields(text_part, schema, field_names=None):
     dx0 = structure.extract_first_dict(bytes_part, schema)
 
     # --- Cross-check each Friendy Field line ---
-    for ff in ff_lines:
-        # --- Extract friendly name & value ---
+    for ff in vf_lines:
+        # --- Extract visible name & value ---
         fX = re.match(r"^\[ (.*) ]  (.*)$", ff)
         if not fX:
             raise TamperError("Invalid format for visible field line %r" % ff[:32])
@@ -266,8 +292,8 @@ def check_friendly_fields(text_part, schema, field_names=None):
         fname = fname.strip()
         name = fname.lower().replace(" ", "_")
         # --- custom-override convert name ---
-        if fname in friendly_to_key:
-            name = friendly_to_key[fname]
+        if fname in visible_to_key:
+            name = visible_to_key[fname]
         fval = fval.strip()  # some converters are finicky about trailing spaces
 
         # --- Check name presence ---
@@ -295,7 +321,71 @@ def check_friendly_fields(text_part, schema, field_names=None):
         secure_val = dx0[name]
         if secure_val != val:
             raise TamperError("Field '%s' visible value %r does not match secure value %r" % (
-            name, val, secure_val))
+                name, val, secure_val))
 
     return bytes_part  # success
 
+
+#
+#
+# def load_files(name):
+#     header_rex = r"^-+\[ (.*?) \]-+$"
+#     pub_text_block = ""
+#     priv_text_block = ""
+#     pub_block = b""
+#     priv_block = b""
+#
+#     combine_name = name + ".b64.txt"
+#     if os.path.isfile(combine_name):
+#         print("Loading combined file ", combine_name)
+#         both_strs = open(combine_name, "r").read()
+#
+#         # regex cap the header lines
+#         hdrs = list(re.finditer(header_rex, both_strs, re.MULTILINE))
+#         if len(hdrs) != 2:
+#             print(" Warning: number of headers in combined file is not 2")
+#
+#         # Structure: first header, first data, second header, second data, end of file
+#         # data offsets are start-of-first-header : start-of-second-header,
+#         # because check_visible_fields wants to see the headers too if they are there.
+#         block0_text = both_strs[hdrs[0].start() : hdrs[1].start()]
+#         block1_text = both_strs[hdrs[1].start( ):]
+#
+#         # normally the second block is the private block, but if a user has shuffled things around
+#         # we cater for that by checking which block has 'PRIVATE' in its header description
+#         if "PRIVATE" in hdrs[0].group(1):       # Private block comes first (not the normal case)
+#             pub_text_block, priv_text_block = block1_text, block0_text
+#         else:   # Otherwise assume the public block comes first.
+#             pub_text_block, priv_text_block = block0_text, block1_text
+#
+#     # Enable more-specific files to override the combined file, if both exist
+#
+#     pub_only_name = name + ".public.b64.txt"
+#     if os.path.isfile(pub_only_name):
+#         print("Loading public file ", pub_only_name)
+#         pub_text_block = open(pub_only_name, "r").read()
+#         hdrs = list(re.finditer(header_rex, pub_text_block, re.MULTILINE))
+#         if len(hdrs) != 1:
+#             print(" Warning: too %s headers in public file" % ("many" if len(hdrs ) >1 else "few"))
+#
+#     priv_only_name = name + ".PRIVATE.b64.txt"
+#     if os.path.isfile(priv_only_name):
+#         print("Loading private file ", priv_only_name)
+#         priv_text_block = open(priv_only_name, "r").read()
+#         hdrs = list(re.finditer(header_rex, priv_text_block, re.MULTILINE))
+#         if len(hdrs) != 1:
+#             print(" Warning: too %s headers in public file" % ("many" if len(hdrs) > 1 else "few"))
+#
+#     # Ensure visible (visible) text-fields (if any) match the secure binary info.
+#     # This also extracts and converts the base64 secure block parts.
+#     if pub_text_block:
+#         print("load_files checking pub_block ")
+#         print(repr(pub_text_block))
+#         pub_block = check_structure_vis_fields(pub_text_block, CERT_SCHEMA)
+#
+#     if priv_text_block:
+#         print("load_files checking priv_block")
+#         print(repr(priv_text_block))
+#         priv_block = check_structure_vis_fields(priv_text_block, PRIV_CRCWRAP_SCHEMA)
+#
+#     return pub_block, priv_block

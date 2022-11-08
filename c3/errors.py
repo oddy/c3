@@ -17,7 +17,7 @@ class ShortChainError(VerifyError):  # the next cert for verifying is missing of
     pass
 class UntrustedChainError(VerifyError):  # the chain ends with a self-sign we dont have in Trusted
     pass
-class TamperError(VerifyError):     # Friendly Fields are present in the textual file,
+class TamperError(VerifyError):     # visible Fields are present in the textual file,
     pass                             #   but don't match up with the secure fields
 class SignError(C3Error):
     pass

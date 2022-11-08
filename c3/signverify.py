@@ -1,7 +1,7 @@
 
 # C3 Signing and verifying actions, and a little in-ram trust store for verify().
 
-import datetime
+import datetime, functools, operator, weakref
 
 import ecdsa
 
@@ -10,7 +10,41 @@ from c3.errors import *
 from c3 import structure
 from c3 import getpassword
 from c3 import pass_protect
+from c3 import textfiles
 from c3.structure import AttrDict
+
+# Consider the "Store everything in a smart object" approach so that we can get the **APIs usable**
+# Because the library user not losing their mind trying to use us, is more important than some
+# memory usage double-ups, and just adding fields to a smart-object stops us *bogging down on that front*
+# user-facing API usability is a lot more important than memory performance, especially for smallscale stuff like this.
+# Licensing's "Entry and Registry-of-Entries" model seems to work quite well
+# IF we're optimising for "give the user an opaque handle" operations, which we SHOULD ALWAYS be.
+
+# ALWAYS copy-paste THEN DRY. Do NOT try to DRY in-flight!
+
+# The smart-ish object that holds all the related info for a keypair and its cert and possibly cert chain
+# The "smart hold-everything" object for a keypair and cert.
+# Policy: anything with "block" in the name is bytes.
+#         File, Txt, Block
+class CertEntry(object):
+    def __init__(self, parent):
+        self.parent = weakref.ref(parent)   # pointer to the SignVerify object whose registry(s) we live in
+        self.pub_text = ""
+        self.epriv_text = ""
+
+        self.pub_block = b""
+        self.epriv_block = b""          # bytes of packed PRIV_CRCWRAPPED structure
+        self.priv_d = {}                # unpacked PRIV_CRCWRAPPED structure
+        self.priv_key_bytes = b""       # actual private key bytes (priv_d.priv_data)
+
+        self.cert = {}
+        self.fullchain = []     # with all the binary, etc
+        self.chain = []         # the user-visible 'meta' one
+        self.payload = b""
+        # self.vis_schema = None
+        self.vis_map = {}
+
+
 
 # Policy: verify() only reads from self.trusted_certs, it doesnt write anything into there.
 #         Caller/User must call add_trusted_certs() to add theirs.
@@ -29,6 +63,59 @@ class SignVerify(object):
             self.pass_protect = pass_protect.PassProtect()
         except OSError as e:         # No libsodium dll found
             self.load_error = "Starting pass_protect: "+str(e)
+
+
+    # ============ Load  ==================================================================
+
+    # Policy: The overall policy governing Source of Truth is this:
+    #         The binary blocks are fully self-describing, and are the canonical source of truth
+    #         for everything. With one exception: the "PRIVATE" in the text header lines
+    #         Controls which piece of base64 is decoded to priv_block and which to pub_block
+
+    # Todo: consider reload+caching with password parameter, so passwords can be desynced.
+
+    # Note: vis_map is ONLY for text-stuff, the binary stuff doesn't actually care _ever_ about the
+    #       user's schema. The USER does, after the user get_payloads.
+
+    # I think the file loaders can now be really basic.
+    # Because all the smarts is in the text processor right here below.
+    # Just open the files and read them and dump them into a single text variable. The filenames
+    # dont actually matter to us, what drives public/private is the "PRIVATE" in the header line.
+    # (that's also the only text part that controls anything, everything else is in the binary blocks.)
+
+    # Policy: not supporting Visible Fields for the private block atm.
+    #         The private block doesn't have a subject name anyway, we're relying on keypair crosscheck
+
+    def load_make_cert_entry(self, text_filename="", text="", block=b"", vis_map=None):
+        highlander_check(text_filename, text, block)  # there can be only one of these 3
+        ce = CertEntry(None)  # no parent yet
+
+        # Note: this if-flow works because text_file, text, and block are mutually exclusive
+        # --- LOAD from aguments ---
+        if text_filename:
+            text = textfiles.load_files2(text_filename)
+
+        if text:  # Text is EITHER, public text, private text, or both texts concatenated.
+            ce.pub_text, ce.epriv_text = textfiles.split_text_pub_priv(text)
+            if ce.pub_text:
+                ce.pub_block = textfiles.text_to_binary_block(ce.pub_text, vis_map)
+            if ce.epriv_text:
+                ce.epriv_block = textfiles.text_to_binary_block(ce.epriv_text)
+
+        if block:
+            ce.pub_block, ce.epriv_block = structure.split_binary_pub_priv(block)
+
+        # --- Unpack binary blocks ---
+        if ce.epriv_block:
+            ce.priv_d = structure.load_priv_block(ce.epriv_block)
+            ce.priv_key_bytes = self.decrypt_private_key(ce.priv_d) # noqa -ide whinge about priv_d
+
+        # so here we have ce.pub_block and ce.priv_key_bytes
+        return ce
+
+
+
+
 
     # ============ Verify ==========================================================================
 
@@ -160,7 +247,7 @@ class SignVerify(object):
 
         # --- Make data-and-sig structure ---
         das = AttrDict(data_part=payload_bytes, sig_part=sig_part)
-        das_bytes = b3.schema_pack(DATA_AND_SIG, das)
+        das_bytes = b3.schema_pack(DATASIG_SCHEMA, das)
 
         # --- prepend header for das itself so straight concatenation makes a list-of-das ---
         das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
@@ -170,7 +257,7 @@ class SignVerify(object):
             # we need to:
             # 1) strip using_public_part's public_part header,
             # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
-            _, index = structure.expect_key_header([KEY_LIST_CERTS], b3.LIST, using_pub, 0)
+            _, index = structure.expect_key_header([PUB_CERTCHAIN], b3.LIST, using_pub, 0)
             using_pub = using_pub[index:]
             # 2) concat our data + using_public_part's data
             out_public_part = das_bytes_with_hdr + using_pub
@@ -179,9 +266,9 @@ class SignVerify(object):
 
         # --- Prepend a new overall public_part header & return pub & private bytes ---
         if action == SIGN_PAYLOAD:
-            key_type = KEY_LIST_PAYLOAD
+            key_type = PUB_PAYLOAD
         else:
-            key_type = KEY_LIST_CERTS
+            key_type = PUB_CERTCHAIN
         out_public_with_hdr = b3.encode_item_joined(key_type, b3.LIST, out_public_part)
 
         return out_public_with_hdr, new_key_priv
@@ -263,4 +350,17 @@ class SignVerify(object):
                 print("Failed decrypting private key: ", str(e))
                 continue        # let user try again
         return priv_ret
+
+
+
+# Policy: Arguments are mutually-exclusive,
+#         not more and not less than one argument must have a value.
+def highlander_check(*args):
+    ibool_args = [int(bool(i)) for i in args]
+    num_true = functools.reduce(operator.add, ibool_args, 0)
+    if num_true == 0:
+        raise ValueError("Please specify one mandatory argument (none were specified)")
+    if num_true > 1:
+        raise ValueError("Please specify only one mandatory argument (multiple were specified)")
+    return True
 

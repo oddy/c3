@@ -1,7 +1,7 @@
 
 # Compact Crypto Certs (C3) Public API
 
-__version__ = "0.9.4"
+__version__ = "0.9.5"
 
 
 from c3.constants import *
@@ -26,3 +26,5 @@ __all__ = [
 # - CSR workflow, creating a cert with --using=None
 # - more key types e.g. libsodium
 
+# - Visible Fields support for PRIV_CRCWRAP_SCHEMA
+# - Dual Block support for binary saving/loading

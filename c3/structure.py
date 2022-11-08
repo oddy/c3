@@ -25,8 +25,8 @@ def make_priv_block(priv_bytes, bare=False):
     privd["priv_type"] = PRIVTYPE_BARE if bare else PRIVTYPE_PASS_PROTECT
     privd["priv_data"] = priv_bytes
     privd["crc32"] = binascii.crc32(privd.priv_data, 0) % (1 << 32)
-    out_bytes = b3.schema_pack(PRIV_CRCWRAPPED, privd)
-    out_bytes_with_hdr = b3.encode_item_joined(KEY_PRIV_CRCWRAPPED, b3.DICT, out_bytes)
+    out_bytes = b3.schema_pack(PRIV_CRCWRAP_SCHEMA, privd)
+    out_bytes_with_hdr = b3.encode_item_joined(PRIV_CRCWRAPPED, b3.DICT, out_bytes)
     return out_bytes_with_hdr
 
 
@@ -36,10 +36,10 @@ def make_priv_block(priv_bytes, bare=False):
 # Caller must then decrypt the private key if needed.
 
 def load_priv_block(block_bytes):
-    _, index = expect_key_header([KEY_PRIV_CRCWRAPPED], b3.DICT, block_bytes, 0)
-    privd = AttrDict(b3.schema_unpack(PRIV_CRCWRAPPED, block_bytes[index:]))
+    _, index = expect_key_header([PRIV_CRCWRAPPED], b3.DICT, block_bytes, 0)
+    privd = AttrDict(b3.schema_unpack(PRIV_CRCWRAP_SCHEMA, block_bytes[index:]))
     # --- Sanity checks ---
-    schema_ensure_mandatory_fields(PRIV_CRCWRAPPED, privd)
+    schema_ensure_mandatory_fields(PRIV_CRCWRAP_SCHEMA, privd)
     if privd.priv_type not in KNOWN_PRIVTYPES:
         raise StructureError("Unknown privtype %d in priv block (wanted %r)" % (privd.priv_type, KNOWN_PRIVTYPES))
     if privd.key_type not in KNOWN_KEYTYPES:
@@ -59,16 +59,16 @@ def load_priv_block(block_bytes):
 
 def load_pub_block(public_part):
     # The public part should have an initial header that indicates whether the first das is a payload or a cert
-    ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, public_part, 0)
+    ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, public_part, 0)
     public_part = public_part[index:]               # chop off the header
 
     # Should be a list of DAS structures, so pythonize the list
-    chain = list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)
+    chain = list_of_schema_unpack(DATASIG_SCHEMA, [KEY_DAS], public_part)
 
     # unpack the certs & sigs in chain
     for i, das in enumerate(chain):
         # dont unpack cert if this is the first das and ppkey is PAYLOAD
-        if i > 0 or ppkey == KEY_LIST_CERTS:
+        if i > 0 or ppkey == PUB_CERTCHAIN:
             das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_part))
             schema_ensure_mandatory_fields(CERT_SCHEMA, das.cert)
 
@@ -127,6 +127,7 @@ def schema_ensure_mandatory_fields(schema, dx):
 # Index and Unicode are the only two unhandled exception types that b3's decode_header code produces when fuzzed.
 # IndexError trying to decode a bad varint for ext_type, datalen or number key.
 # Unicode for when b3 thinks there's a utf8 key but the utf8 is bad.
+
 def expect_key_header(want_keys, want_type, buf, index):
     if not buf:
         raise StructureError("No data - buffer is empty or None")
@@ -138,7 +139,8 @@ def expect_key_header(want_keys, want_type, buf, index):
     if key not in want_keys:
         raise StructureError \
             ("Incorrect key in header - wanted %r got %s" % (want_keys, repr(key)[:32]))
-    if data_type != want_type:
+    if want_type is not None and  want_type != data_type:
+        # type checking can be disabled for peeking ops.
         raise StructureError \
             ("Incorrect type in header - wanted %r got %s" % (want_type, repr(data_type)[:32]))
     if not has_data:
@@ -147,19 +149,37 @@ def expect_key_header(want_keys, want_type, buf, index):
         raise StructureError("No data after header - buffer is empty")
     return key, index
 
+# Used by the uniloader when someone passes a binary block directly.
+
+
+
+def split_binary_pub_priv(block_in):
+    want_keys = [PUB_CSR, PUB_PAYLOAD, PUB_CERTCHAIN, PRIV_CRCWRAPPED, DUALBLOCK]
+    key, index = expect_key_header(want_keys, None, block_in, 0)
+    if key == PRIV_CRCWRAPPED:
+        return b"", block_in
+    if key in (PUB_CSR, PUB_PAYLOAD, PUB_CERTCHAIN):
+        return block_in, b""
+    if key == DUALBLOCK:
+        dual = b3.schema_unpack(DUALBLOCK_SCHEMA, block_in[index:])
+        return dual["public"], dual["private"]
+
+
 
 # This does not ensure mandatory fields are present like load_pub_block() does, so it can be used for
-# more things e.g. friendly_fields and check_expiry.
+# more things e.g. visible_fields and check_expiry.
+# Also this keeps the vis_fields process seperate and distinct from the loading binary process.
+# Which we want.
 
 def extract_first_dict(part_block, schema):
-    if schema == PRIV_CRCWRAPPED:  # private part block
-        ppkey, index = expect_key_header([KEY_PRIV_CRCWRAPPED, ], b3.DICT, part_block, 0)
+    if schema == PRIV_CRCWRAP_SCHEMA:  # private part block.   Note: this isn't actually used.
+        ppkey, index = expect_key_header([PRIV_CRCWRAPPED, ], b3.DICT, part_block, 0)
         private_part = part_block[index:]
         dx0 = AttrDict(b3.schema_unpack(schema, private_part))
     else:           # public part block, using CERT_SCHEMA or a caller's SCHEMA
-        ppkey, index = expect_key_header([KEY_LIST_PAYLOAD, KEY_LIST_CERTS], b3.LIST, part_block, 0)
+        ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, part_block, 0)
         public_part = part_block[index:]
-        das0 = list_of_schema_unpack(DATA_AND_SIG, [KEY_DAS], public_part)[0]
+        das0 = list_of_schema_unpack(DATASIG_SCHEMA, [KEY_DAS], public_part)[0]
         dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
     return dx0
 
