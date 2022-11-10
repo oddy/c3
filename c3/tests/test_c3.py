@@ -5,6 +5,9 @@ import base64, traceback, random, os, datetime
 from pprint import pprint
 
 import pytest
+
+pytestmark = pytest.mark.skipif(True, reason="Skipping old tests")       # skip all tests in here
+
 import b3.hexdump
 
 from c3.constants import *
@@ -12,7 +15,6 @@ from c3.errors import *
 from c3.signverify import SignVerify
 from c3 import structure
 from c3 import textfiles
-
 
 @pytest.fixture
 def c3m():
@@ -28,7 +30,7 @@ def test_privkey_bare(c3m):
     priv_block_bytes = structure.make_priv_block(bare_priv, bare=True)
     privd = structure.load_priv_block(priv_block_bytes)
     assert privd.priv_type == PRIVTYPE_BARE
-    assert privd.key_type == KEYTYPE_ECDSA_256P
+    assert privd.key_type == KT_ECDSA_PRIME256V1
     decrypted_priv = c3m.decrypt_private_key(privd)     # should pass bare through
     assert decrypted_priv == bare_priv
 
@@ -41,7 +43,7 @@ def test_privkey_env_var(c3m):
 
     privd = structure.load_priv_block(priv_block_bytes)
     assert privd.priv_type == PRIVTYPE_PASS_PROTECT
-    assert privd.key_type == KEYTYPE_ECDSA_256P
+    assert privd.key_type == KT_ECDSA_PRIME256V1
     decrypted_priv = c3m.decrypt_private_key(privd)
     assert decrypted_priv == bare_priv
 
@@ -362,8 +364,8 @@ def test_make_inter_append_expired_root(c3m):
 
 
 # Note that this doesn't fail, even though we are *appending* the root9 cert itself into the chain
-#      which you're not supposed to do. It succeeds because root9 is in trusted_certs and verify
-#      sees that the NAME root9 is in trusted_certs so sets the found_in_trusted flag so that
+#      which you're not supposed to do. It succeeds because root9 is in trusted_ces and verify
+#      sees that the NAME root9 is in trusted_ces so sets the found_in_trusted flag so that
 #      UntrustedChainError doesn't trigger at the end.
 
 # Note this looks like it would open us up to malicious actors appending their own cert with the same

@@ -21,7 +21,7 @@ class AttrDict(dict):
 
 def make_priv_block(priv_bytes, bare=False):
     privd = AttrDict()
-    privd["key_type"] = KEYTYPE_ECDSA_256P
+    privd["key_type"] = KT_ECDSA_PRIME256V1
     privd["priv_type"] = PRIVTYPE_BARE if bare else PRIVTYPE_PASS_PROTECT
     privd["priv_data"] = priv_bytes
     privd["crc32"] = binascii.crc32(privd.priv_data, 0) % (1 << 32)
@@ -57,13 +57,36 @@ def load_priv_block(block_bytes):
 # Out: data-and-sig list cert chain structure
 # Note: the inverse of this function is part of make_sign
 
+def load_pub_block2(public_part):
+    # The public part should have an initial header that indicates whether the first das is a payload or a cert
+    ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, public_part, 0)
+    public_part = public_part[index:]               # chop off the header
+
+    # Should be a list of DAS structures, so pythonize the list
+    chain = list_of_schema_unpack(DATASIG_SCHEMA, [HDR_DAS], public_part)
+
+    # unpack the certs & sigs in chain
+    for i, das in enumerate(chain):
+        # dont unpack cert dif this is the first das and ppkey is PAYLOAD
+        if i > 0 or ppkey == PUB_CERTCHAIN:
+            das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_part))
+            schema_ensure_mandatory_fields(CERT_SCHEMA, das.cert)
+
+        das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_part))
+        schema_ensure_mandatory_fields(SIG_SCHEMA, das.sig)
+
+    return ppkey, chain
+
+
+
+
 def load_pub_block(public_part):
     # The public part should have an initial header that indicates whether the first das is a payload or a cert
     ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, public_part, 0)
     public_part = public_part[index:]               # chop off the header
 
     # Should be a list of DAS structures, so pythonize the list
-    chain = list_of_schema_unpack(DATASIG_SCHEMA, [KEY_DAS], public_part)
+    chain = list_of_schema_unpack(DATASIG_SCHEMA, [HDR_DAS], public_part)
 
     # unpack the certs & sigs in chain
     for i, das in enumerate(chain):
@@ -164,6 +187,10 @@ def split_binary_pub_priv(block_in):
         dual = b3.schema_unpack(DUALBLOCK_SCHEMA, block_in[index:])
         return dual["public"], dual["private"]
 
+def combine_binary_pub_priv(pub_block, priv_block):
+    dbx = dict(public=pub_block, private=priv_block)
+    dual_bytes = b3.schema_pack(DUALBLOCK_SCHEMA, dbx)
+    return b3.encode_item_joined(DUALBLOCK, b3.DICT, dual_bytes)
 
 
 # This does not ensure mandatory fields are present like load_pub_block() does, so it can be used for
@@ -179,7 +206,7 @@ def extract_first_dict(part_block, schema):
     else:           # public part block, using CERT_SCHEMA or a caller's SCHEMA
         ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, part_block, 0)
         public_part = part_block[index:]
-        das0 = list_of_schema_unpack(DATASIG_SCHEMA, [KEY_DAS], public_part)[0]
+        das0 = list_of_schema_unpack(DATASIG_SCHEMA, [HDR_DAS], public_part)[0]
         dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
     return dx0
 

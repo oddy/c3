@@ -19,22 +19,24 @@ SHOW_VAR = "C3_SHOW_PASS"
 
 
 # --- Top-level tag values ---
-PUB_CSR = 0xaa
-PUB_PAYLOAD = 0xbb  # cert chain with a payload as the first entry
-PUB_CERTCHAIN = 0xcc   # cert chain with a cert as the first entry
-PRIV_CRCWRAPPED = 0xdd       # "priv data with a crc32 integrity check"
-DUALBLOCK = 0xee
+PUB_CSR = 0x10
+DUALBLOCK = 0x11
+PUB_PAYLOAD = 0x12      # cert chain with a payload as the first entry
+BARE_PAYLOAD = 0x13     # literally just payload bytes but tagged with a header tag.
+PUB_CERTCHAIN = 0x14    # cert chain with a cert as the first entry
+PRIV_CRCWRAPPED = 0x15  # "priv data with a crc32 integrity check"
 
 # Public-part chain-level
-KEY_DAS = 77            # "data_part and sig_part structure"
+HDR_DAS = 0x19            # "data_part and sig_part structure"
 
 
 # Private-part field types
 PRIVTYPE_BARE = 1
 PRIVTYPE_PASS_PROTECT = 2
-KEYTYPE_ECDSA_256P = 1      # this may include hashers (tho may include hashtype later?)
+KT_ECDSA_PRIME256V1 = 1      # this may include hashers (tho may include hashtype later?)
 KNOWN_PRIVTYPES = [1, 2]
 KNOWN_KEYTYPES = [1]
+
 
 # --- Public-Part data structures ---
 
@@ -58,7 +60,8 @@ DATASIG_SCHEMA = (
     # (We could put a sig_list item here later if we want to go chain multi sig.)
 )
 
-# --- Private-Part data structures ---
+
+# --- Private block top level data structures ---
 
 PRIV_CRCWRAP_SCHEMA = (
     (b3.UVARINT, "priv_type", 0, True),      # protection method (e.g. bare/none, or pass_protect)
@@ -76,4 +79,4 @@ DUALBLOCK_SCHEMA = (
 
 
 
-KEY2NAME = {55 : "PUB_PAYLOAD", 66 : "PUB_CERTCHAIN", 77 : "KEY_DAS", 88 : "PRIV_CRCWRAPPED"}
+KEY2NAME = {55 : "PUB_PAYLOAD", 66 : "PUB_CERTCHAIN", 77 : "HDR_DAS", 88 : "PRIV_CRCWRAPPED"}

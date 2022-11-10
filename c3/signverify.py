@@ -11,6 +11,7 @@ from c3 import structure
 from c3 import getpassword
 from c3 import pass_protect
 from c3 import textfiles
+from c3 import commandline
 from c3.structure import AttrDict
 
 # Consider the "Store everything in a smart object" approach so that we can get the **APIs usable**
@@ -26,34 +27,45 @@ from c3.structure import AttrDict
 # The "smart hold-everything" object for a keypair and cert.
 # Policy: anything with "block" in the name is bytes.
 #         File, Txt, Block
+
+# Policy: public binary structure - sticking with "chain[0].data_part can be payload or cert"
+#         rather than "seperate payload & sig top level structure" because it makes verify simpler
+#         & its too much change at this point.
+
+
 class CertEntry(object):
     def __init__(self, parent):
         self.parent = weakref.ref(parent)   # pointer to the SignVerify object whose registry(s) we live in
+        self.pub_type = 0                   # tag value e.g. PUB_CSR
+        self.name = ""
+
         self.pub_text = ""
         self.epriv_text = ""
 
         self.pub_block = b""
         self.epriv_block = b""          # bytes of packed PRIV_CRCWRAPPED structure
+
         self.priv_d = {}                # unpacked PRIV_CRCWRAPPED structure
         self.priv_key_bytes = b""       # actual private key bytes (priv_d.priv_data)
 
-        self.cert = {}
-        self.fullchain = []     # with all the binary, etc
-        self.chain = []         # the user-visible 'meta' one
-        self.payload = b""
-        # self.vis_schema = None
+        self.payload = b""              # this or cert, depending on pub_type
+        self.cert = {}                  # aka chain[0]
+        self.sig = b""
+
+        self.chain = []
+
         self.vis_map = {}
 
 
-
-# Policy: verify() only reads from self.trusted_certs, it doesnt write anything into there.
+# Policy: verify() only reads from self.trusted_ces, it doesnt write anything into there.
 #         Caller/User must call add_trusted_certs() to add theirs.
 
 # Note: the priv key encrypt/decrypt functions are here too, just to keep things to 1 class for now.
 
 class SignVerify(object):
     def __init__(self):
-        self.trusted_certs = {}   # by name. For e.g. root certs etc.
+        self.trusted_ces = {}   # by name. Used by verify().
+        self.signers = {}         # by name. Used by sign().
 
         # We need to load libsodium on startup if it is there. But also support cases where it's
         # not available (e.g.bare keys)
@@ -88,7 +100,7 @@ class SignVerify(object):
 
     def load_make_cert_entry(self, text_filename="", text="", block=b"", vis_map=None):
         highlander_check(text_filename, text, block)  # there can be only one of these 3
-        ce = CertEntry(None)  # no parent yet
+        ce = CertEntry(self)
 
         # Note: this if-flow works because text_file, text, and block are mutually exclusive
         # --- LOAD from aguments ---
@@ -110,12 +122,131 @@ class SignVerify(object):
             ce.priv_d = structure.load_priv_block(ce.epriv_block)
             ce.priv_key_bytes = self.decrypt_private_key(ce.priv_d) # noqa -ide whinge about priv_d
 
-        # so here we have ce.pub_block and ce.priv_key_bytes
+        if not ce.pub_block:            # only bare-payload "CE"s dont have a public part, and they
+            raise ValueError("Load: public part is missing")  # dont come through here, so
+
+        ce.pub_type, ce.chain = structure.load_pub_block2(ce.pub_block)
+
+        if ce.pub_type in (PUB_CSR, PUB_CERTCHAIN):
+            ce.name = ce.chain[0].cert.subject_name
+            ce.cert = ce.chain[0].cert
+        if ce.pub_type in (PUB_PAYLOAD,):
+            ce.payload =  ce.chain[0].data_part
+
+        # so here we have ce.pub_block & ce.chain, and ce.priv_key_bytes
+        return ce
+
+    def load_signer(self, *args, **kw):
+        ce = self.load_make_cert_entry(*args, **kw)
+        # Signers must have a private key
+        if not ce.priv_key_bytes:
+            raise ValueError("Specified signer does not have a private key component")
+        # add to registry
+        self.signers[ce.name] = ce
+
+    def load_trusted_cert(self, *args, **kw):
+        ce = self.load_make_cert_entry(*args, **kw)
+        force = "force" in kw and kw["force"] is True
+        if not force:
+            try:
+                self.verify2(ce)
+            except UntrustedChainError:  # ignore this one failure mode because we havent installed
+                pass                     # this/these certs yet
+        # add to registry
+        self.trusted_ces[ce.cert.cert_id] = ce            # Note: by ID
+        return
+
+    # ============ Makers ===============
+
+    def make_csr(self, name, expiry_text):
+        expiry = commandline.ParseBasicDate(expiry_text)
+        ce = CertEntry(self)
+        ce.pub_type = PUB_CSR
+        ce.name = name
+
+        cert_id = name.encode("ascii")
+        today = datetime.date.today()
+        key_priv, key_pub = self.keys_generate(keytype=KT_ECDSA_PRIME256V1)
+
+        ce.cert = AttrDict(public_key=key_pub, subject_name=name, cert_id=cert_id, issued_date=today,
+                           key_type=KT_ECDSA_PRIME256V1, expiry_date=expiry)
+        ce.priv_key_bytes = key_priv
+        ce.epriv_block = structure.make_priv_block(key_priv, bare=True)
+        # Make an 'encrypted private key structure' that is actually a bare (unencrypted) key.
+        # Call encrypt_private_key_ce(ce) later to replace .epriv_block with the encrypted version.
+        # Do this "last" so as not to inconvenience the user.  (e.g. after self-sign)
+        return ce
+
+    def make_payload(self, payload_bytes):
+        ce = CertEntry(self)
+        ce.pub_type = BARE_PAYLOAD
+        ce.payload = payload_bytes
         return ce
 
 
+    # =========== New Sign ==================
 
+    # so self-sign is make_csr, sign, encrypt_priv, save
+    # non-self-sign is load, load_signer, sign, encrypt_priv if not already, save
 
+    def sign(self, ce, signer, link_by_name=False):        # link_name
+        bytes_to_sign = b""
+        payload = b""
+        self_signing = (ce == signer)
+        # Take cert, turn into bytes, get privkey from signing, sign bytes, make sig.
+        # Then repatch to_sign's pub_block with signing_ce's pub_block.
+
+        if datetime.date.today() > signer.cert.expiry_date:
+            raise CertExpired("Signing cert has expired")
+
+        # First param needs to always be a ce if we are in-place transforming it.
+        # Either we are signing payload bytes, or we are signing cert bytes.
+        if ce.cert:
+            payload = b3.schema_pack(CERT_SCHEMA, ce.cert)
+        if ce.payload:
+            payload = ce.payload
+        if not payload:
+            raise ValueError("Sign error: no cert or payload found to sign")
+        if not signer.priv_key_bytes:
+            raise ValueError("Sign error: given signer has no private key to sign with")
+
+        # perform sign with key, get signature bytes
+        key_type = signer.cert.key_type
+        sig_bytes = self.keys_sign_make_sig(key_type, signer.priv_key_bytes, payload)
+
+        # build our chain with 'payload'&sig + signers chain
+        signer_cert_id = signer.cert.cert_id if link_by_name or self_signing else b""
+        datasig = self.make_datasig(payload, sig_bytes, signer_cert_id)
+
+        ce.chain = [datasig] + signer.chain
+
+        if ce.pub_type == PUB_CSR:
+            ce.pub_type = PUB_CERTCHAIN
+        if ce.pub_type == BARE_PAYLOAD:
+            ce.pub_type = PUB_PAYLOAD
+
+        self.make_pub_block(ce)     # serialize the chain
+
+    def make_datasig(self, payload_bytes, sig_bytes, signer_cert_id):
+        sig_d = AttrDict(signature=sig_bytes, signing_cert_id=signer_cert_id)
+        sig_part = b3.schema_pack(SIG_SCHEMA, sig_d)
+        datasig = AttrDict(data_part=payload_bytes, sig_part=sig_part)
+        return datasig
+
+    def make_pub_block(self, ce):
+        # We need to pack the datasigs, then join those blocks, prepend the header, and that's pub_block
+        chain_blocks = []
+        for das in ce.chain:
+            das_bytes = b3.schema_pack(DATASIG_SCHEMA, das)
+            das_bytes_with_hdr = b3.encode_item_joined(HDR_DAS, b3.DICT, das_bytes)
+            chain_blocks.append(das_bytes_with_hdr)
+        ce.pub_block = b3.encode_item_joined(ce.pub_type, b3.LIST, b"".join(chain_blocks))
+
+    # after sign() the pub_block is made, and if ce_encrypt is called, the priv block is made too?
+    # The test can
+
+    def to_binary_dual(self, ce):
+        return structure.combine_binary_pub_priv(ce.pub_block, ce.epriv_block)
 
     # ============ Verify ==========================================================================
 
@@ -127,12 +258,19 @@ class SignVerify(object):
     # 2) Named cert not found - in the cert store / trust store / certs_by_name etc
     # 3) Last cert is self-signed and verifies OK but isn't in the trust store. (Untrusted Chain)
 
+    def verify2(self, ce):
+        chain = ce.chain
+        if not chain:
+            raise ValueError("Cannot verify - no cert chain present")
+        return self.verify(chain)
+
     def verify(self, chain):
         certs_by_id = {das.cert.cert_id : das.cert for das in chain if "cert" in das}
-        found_in_trusted = False         # whether we have established a link to the trusted_certs
+        found_in_trusted = False         # whether we have established a link to the trusted_ces
 
         for i, das in enumerate(chain):
             signing_cert_id = das.sig.signing_cert_id
+            print("====== Chain DAS signing_cert_id: ",signing_cert_id)
             # --- Find the 'next cert' ie the one which verifies our signature ---
             if not signing_cert_id:
                 # --- no signing-id means "next cert in the chain" ---
@@ -141,12 +279,16 @@ class SignVerify(object):
                 next_cert = chain[i + 1].cert
             else:
                 # --- got a name, look in trusted for it, then in ourself (self-signed) ---
-                if signing_cert_id in self.trusted_certs:
-                    next_cert = self.trusted_certs[signing_cert_id]
+                print("self.trusted_ces ", self.trusted_ces)
+                if signing_cert_id in self.trusted_ces:
+                    print(" found in trusted ")
+                    next_cert = self.trusted_ces[signing_cert_id].cert   
                     found_in_trusted = True
                 elif signing_cert_id in certs_by_id:
+                    print(" found in CBI ")
                     next_cert = certs_by_id[signing_cert_id]
                 else:
+                    print(" not found")
                     raise CertNotFoundError(structure.ctnm(das)+"wanted cert %r not found" % signing_cert_id)
 
             # --- Actually verify the signature ---
@@ -176,7 +318,7 @@ class SignVerify(object):
         for das in cert_chain:
             if "cert" not in das:         # skip payload if there is one
                 continue
-            self.trusted_certs[das.cert.cert_id] = das.cert
+            self.trusted_ces[das.cert.cert_id] = das.cert
         return
 
 
@@ -203,7 +345,7 @@ class SignVerify(object):
             # Make sure the signing cert hasn't expired!
             structure.ensure_not_expired(using_pub)
             # Make sure the keypair really is a keypair
-            self.check_privpub_match_ecdsanist256p(using_priv, using_pub)
+            self.keys_check_privpub_match(using_priv, using_pub)
 
         # sanity check expiry, needed for selfsign and intermediate
         if action in (MAKE_INTERMEDIATE, MAKE_SELFSIGNED):
@@ -218,13 +360,13 @@ class SignVerify(object):
         # --- Key gen if applicable ---
         if action in (MAKE_SELFSIGNED, MAKE_INTERMEDIATE):
             # make keys
-            new_key_priv, new_key_pub = self.gen_keys_ECDSA_nist256p()
+            new_key_priv, new_key_pub = self.keys_generate()
             # make pub cert for pub key
 
             today = datetime.date.today()
             new_pub_cert = AttrDict(
                 public_key=new_key_pub, subject_name=name, cert_id=cert_id, issued_date=today,
-                key_type=KEYTYPE_ECDSA_256P, expiry_date=expiry
+                key_type=KT_ECDSA_PRIME256V1, expiry_date=expiry
             )
             new_pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, new_pub_cert)
             payload_bytes = new_pub_cert_bytes
@@ -250,7 +392,7 @@ class SignVerify(object):
         das_bytes = b3.schema_pack(DATASIG_SCHEMA, das)
 
         # --- prepend header for das itself so straight concatenation makes a list-of-das ---
-        das_bytes_with_hdr = b3.encode_item_joined(KEY_DAS, b3.DICT, das_bytes)
+        das_bytes_with_hdr = b3.encode_item_joined(HDR_DAS, b3.DICT, das_bytes)
 
         # --- Append Using's public_part (the chain) if applicable ---
         if link == LINK_APPEND and action != MAKE_SELFSIGNED:
@@ -274,19 +416,38 @@ class SignVerify(object):
         return out_public_with_hdr, new_key_priv
 
 
+    # ========== Signing Key stuff ====================
+
     # In: nothing
     # Out: key pair as priv bytes and pub bytes
 
-    def gen_keys_ECDSA_nist256p(self):
+    # NIST P-256 aka secp256r1 aka prime256v1
+
+    def keys_generate(self, keytype):
+        if keytype not in (KT_ECDSA_PRIME256V1,):
+            raise NotImplementedError("Error generating keypair - unknown keytype")
         curve = [i for i in ecdsa.curves.curves if i.name == 'NIST256p'][0]
         priv = ecdsa.SigningKey.generate(curve=curve)
         pub = priv.get_verifying_key()
         return priv.to_string(), pub.to_string()
 
+    def keys_sign_make_sig(self, keytype, priv_bytes, payload_bytes):
+        if keytype not in (KT_ECDSA_PRIME256V1,):
+            raise NotImplementedError("Error signing payload - unknown keytype")
+        SK = ecdsa.SigningKey.from_string(priv_bytes, ecdsa.NIST256p)
+        sig_bytes  = SK.sign(payload_bytes)
+        return sig_bytes
+
+    def keys_verify(self, keytype, public_key_bytes, payload_bytes, signature_bytes):
+        if keytype not in (KT_ECDSA_PRIME256V1,):
+            raise NotImplementedError("Error verifying payload - unknown keytype")
+        VK = ecdsa.VerifyingKey.from_string(public_key_bytes, ecdsa.NIST256p)
+        return VK.verify(signature_bytes, payload_bytes)  # returns True or raises exception
+
     # In: priv key bytes, pub chain block
     # Out: true or exception
 
-    def check_privpub_match_ecdsanist256p(self, priv_key_bytes, using_pub_block):
+    def keys_check_privpub_match(self, priv_key_bytes, using_pub_block):
         using_pub_key = structure.extract_first_dict(using_pub_block, CERT_SCHEMA).public_key
         priv = ecdsa.SigningKey.from_string(priv_key_bytes, ecdsa.NIST256p)
         pub = priv.get_verifying_key()
@@ -300,14 +461,20 @@ class SignVerify(object):
     # NOTE that these interact with the user (password entry)
     #         and use a pass_protect object which needs startup initialisation (load libsodium)
 
+    def encrypt_private_key_ce(self, ce):
+        if not ce.priv_key_bytes:
+            raise ValueError("CE has no private key bytes")
+        epriv_bytes = self.encrypt_private_key(ce.priv_key_bytes)
+        ce.epriv_block = structure.make_priv_block(epriv_bytes, bare=False)
+
     # In:  private key bytes  (and possibly user entering a password interactively)
     # Out: encrypted private key bytes
 
     def encrypt_private_key(self, priv_bytes):
         if not self.pass_protect:
             raise RuntimeError(self.load_error)
-        prompt1 = "Private  key encryption password: "
-        prompt2 = "Re-enter key encryption password: "
+        prompt1 = "Enter password to set on private key > "
+        prompt2 = "Re-enter private key password        > "
         passw = getpassword.get_double_enter_setting_password(prompt1, prompt2)
         if not passw:
             raise ValueError("No password supplied, exiting")
