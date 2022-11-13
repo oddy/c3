@@ -20,16 +20,34 @@ def c3m():
     return c3_obj
 
 
-def test_roundtrip_selfsign(c3m):
+# Can we binary roundtrip just a CSR (pub block isn't a chain, just a cert by itself)
+# turn CSR into binary, then load that, then turn THAT into binary, then check the binaries match.
+
+def test_csr_roundtrip_binary(c3m):
+    ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
+    ce1_bin = ce1.both.as_binary()
+    ce2 = c3m.load_make_cert_entry(block=ce1_bin)
+    ce2_bin = ce2.both.as_binary()
+    assert ce1_bin == ce2_bin
+
+
+
+
+def test_selfsign_binary_verify(c3m):
     ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
     c3m.sign(ce1, ce1)
-    dual_bytes = c3m.to_binary_dual(ce1)
+    dual_bytes = ce1.both.as_binary()
 
     c3m.load_trusted_cert(block=dual_bytes)
-    print("\n\n  ---- lod trusted certs done ----\n\n")
     ce2 = c3m.load_make_cert_entry(block=dual_bytes)
     assert c3m.verify2(ce2) is True
 
 
-
-
+# def test_selfsign_text_roundtrip(c3m):
+#     ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
+#     c3m.sign(ce1, ce1)
+#     dual_bytes = ce1.both.as_binary()
+#
+#     c3m.load_trusted_cert(block=dual_bytes)
+#     ce2 = c3m.load_make_cert_entry(block=dual_bytes)
+#     assert c3m.verify2(ce2) is True

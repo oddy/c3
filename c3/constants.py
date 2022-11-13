@@ -19,12 +19,12 @@ SHOW_VAR = "C3_SHOW_PASS"
 
 
 # --- Top-level tag values ---
-PUB_CSR = 0x10
-DUALBLOCK = 0x11
-PUB_PAYLOAD = 0x12      # cert chain with a payload as the first entry
-BARE_PAYLOAD = 0x13     # literally just payload bytes but tagged with a header tag.
-PUB_CERTCHAIN = 0x14    # cert chain with a cert as the first entry
-PRIV_CRCWRAPPED = 0x15  # "priv data with a crc32 integrity check"
+PUB_CSR = 10
+DUALBLOCK = 11
+PUB_PAYLOAD = 12      # cert chain with a payload as the first entry
+BARE_PAYLOAD = 13     # literally just payload bytes but tagged with a header tag.
+PUB_CERTCHAIN = 14    # cert chain with a cert as the first entry
+PRIV_CRCWRAPPED = 15  # "priv data with a crc32 integrity check"
 
 # Public-part chain-level
 HDR_DAS = 0x19            # "data_part and sig_part structure"

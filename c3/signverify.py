@@ -31,6 +31,63 @@ from c3.structure import AttrDict
 # Policy: public binary structure - sticking with "chain[0].data_part can be payload or cert"
 #         rather than "seperate payload & sig top level structure" because it makes verify simpler
 #         & its too much change at this point.
+#         (Also makes verify a lot simpler to implement in *other* languages quickly)
+
+
+# data-output classes
+# so we can go e.g. ce.pub.as_text(),  ce.both.as_binary(),
+
+class CeOutPub(object):
+    def __init__(self, ce_parent):
+        self.ce = ce_parent
+
+    def as_binary(self):
+        return self.ce.pub_block
+
+    def as_text(self, vis_map=None, desc=""):
+        return textfiles.make_pub_txt_str_ce(self.ce, desc, vis_map)
+
+    def write_text_file(self, filename, vis_map=None, desc=""):
+        txt = self.as_text(vis_map, desc)
+        with open(filename, "wt") as f:
+            f.write(txt)
+        return
+
+
+class CeOutPriv(object):
+    def __init__(self, ce_parent):
+        self.ce = ce_parent
+
+    def as_binary(self):
+        return self.ce.epriv_block
+
+    def as_text(self, vis_map=None, desc=""):
+        return textfiles.make_priv_txt_str(self.ce, desc, vis_map)
+
+    def write_text_file(self, filename, vis_map=None, desc=""):
+        txt = self.as_text(vis_map, desc)
+        with open(filename, "wt") as f:
+            f.write(txt)
+
+
+class CeOutBoth(object):
+    def __init__(self, ce_parent):
+        self.ce = ce_parent
+
+    def as_binary(self):
+        return structure.combine_binary_pub_priv(self.ce.pub_block, self.ce.epriv_block)
+
+    def as_text(self, vis_map=None, desc=""):
+        pub_str = textfiles.make_pub_txt_str_ce(self.ce, desc, vis_map)
+        priv_str = textfiles.make_priv_txt_str(self.ce, desc, vis_map)
+        return "\n" + pub_str + "\n" + priv_str + "\n"
+
+    def write_text_file(self, filename, vis_map=None, desc=""):
+        txt = self.as_text(vis_map, desc)
+        with open(filename, "wt") as f:
+            f.write(txt)
+
+
 
 
 class CertEntry(object):
@@ -55,6 +112,11 @@ class CertEntry(object):
         self.chain = []
 
         self.vis_map = {}
+
+        # Output class instances, so user can go ce.pub.as_text(), ce.both.as_binary() etc.
+        self.pub = CeOutPub(self)
+        self.priv = CeOutPriv(self)
+        self.both = CeOutBoth(self)
 
 
 # Policy: verify() only reads from self.trusted_ces, it doesnt write anything into there.
@@ -125,15 +187,19 @@ class SignVerify(object):
         if not ce.pub_block:            # only bare-payload "CE"s dont have a public part, and they
             raise ValueError("Load: public part is missing")  # dont come through here, so
 
-        ce.pub_type, ce.chain = structure.load_pub_block2(ce.pub_block)
-
-        if ce.pub_type in (PUB_CSR, PUB_CERTCHAIN):
+        # todo: merge this with load_pub_block2
+        ce.pub_type, thingy = structure.load_pub_block2(ce.pub_block)
+        if ce.pub_type == PUB_CSR:      # CSRs are just a cert
+            ce.cert = thingy                # we're mixing cert-level stuff with CE-level stuff
+            ce.name = ce.cert.subject_name      # noqa a bit here, so there are double-ups.
+        if ce.pub_type == PUB_CERTCHAIN:
+            ce.chain = thingy
             ce.name = ce.chain[0].cert.subject_name
             ce.cert = ce.chain[0].cert
-        if ce.pub_type in (PUB_PAYLOAD,):
-            ce.payload =  ce.chain[0].data_part
+        if ce.pub_type == PUB_PAYLOAD:          # note: no name, no cert
+            ce.chain = thingy
+            ce.payload = ce.chain[0].data_part
 
-        # so here we have ce.pub_block & ce.chain, and ce.priv_key_bytes
         return ce
 
     def load_signer(self, *args, **kw):
@@ -158,6 +224,12 @@ class SignVerify(object):
 
     # ============ Makers ===============
 
+    # Note: CSRs are exportable, they have their own binary format which is just the cert.
+    #       so not a chain like all the others.
+    #       bare_payloads are NOT exportable, they are intended to be signed immediately.
+    #       we want CSR loads to be different to "just sign a payload" because we want to have the
+    #       option of e.g. adjusting the wanted expiry date, etc.
+
     def make_csr(self, name, expiry_text):
         expiry = commandline.ParseBasicDate(expiry_text)
         ce = CertEntry(self)
@@ -170,11 +242,17 @@ class SignVerify(object):
 
         ce.cert = AttrDict(public_key=key_pub, subject_name=name, cert_id=cert_id, issued_date=today,
                            key_type=KT_ECDSA_PRIME256V1, expiry_date=expiry)
+
         ce.priv_key_bytes = key_priv
         ce.epriv_block = structure.make_priv_block(key_priv, bare=True)
         # Make an 'encrypted private key structure' that is actually a bare (unencrypted) key.
         # Call encrypt_private_key_ce(ce) later to replace .epriv_block with the encrypted version.
         # Do this "last" so as not to inconvenience the user.  (e.g. after self-sign)
+
+        # All the exportable (as_binary etc) pub_blocks are serializations of ce.chain, except for
+        # CSRs, which are serializations of ce.cert.
+        cert_block = b3.schema_pack(CERT_SCHEMA, ce.cert)
+        ce.pub_block = b3.encode_item_joined(PUB_CSR, b3.DICT, cert_block)
         return ce
 
     def make_payload(self, payload_bytes):
@@ -225,7 +303,7 @@ class SignVerify(object):
         if ce.pub_type == BARE_PAYLOAD:
             ce.pub_type = PUB_PAYLOAD
 
-        self.make_pub_block(ce)     # serialize the chain
+        self.make_chain_pub_block(ce)     # serialize the chain
 
     def make_datasig(self, payload_bytes, sig_bytes, signer_cert_id):
         sig_d = AttrDict(signature=sig_bytes, signing_cert_id=signer_cert_id)
@@ -233,7 +311,7 @@ class SignVerify(object):
         datasig = AttrDict(data_part=payload_bytes, sig_part=sig_part)
         return datasig
 
-    def make_pub_block(self, ce):
+    def make_chain_pub_block(self, ce):
         # We need to pack the datasigs, then join those blocks, prepend the header, and that's pub_block
         chain_blocks = []
         for das in ce.chain:
@@ -242,11 +320,10 @@ class SignVerify(object):
             chain_blocks.append(das_bytes_with_hdr)
         ce.pub_block = b3.encode_item_joined(ce.pub_type, b3.LIST, b"".join(chain_blocks))
 
+
+
     # after sign() the pub_block is made, and if ce_encrypt is called, the priv block is made too?
     # The test can
-
-    def to_binary_dual(self, ce):
-        return structure.combine_binary_pub_priv(ce.pub_block, ce.epriv_block)
 
     # ============ Verify ==========================================================================
 
@@ -279,16 +356,12 @@ class SignVerify(object):
                 next_cert = chain[i + 1].cert
             else:
                 # --- got a name, look in trusted for it, then in ourself (self-signed) ---
-                print("self.trusted_ces ", self.trusted_ces)
                 if signing_cert_id in self.trusted_ces:
-                    print(" found in trusted ")
-                    next_cert = self.trusted_ces[signing_cert_id].cert   
+                    next_cert = self.trusted_ces[signing_cert_id].cert
                     found_in_trusted = True
                 elif signing_cert_id in certs_by_id:
-                    print(" found in CBI ")
                     next_cert = certs_by_id[signing_cert_id]
                 else:
-                    print(" not found")
                     raise CertNotFoundError(structure.ctnm(das)+"wanted cert %r not found" % signing_cert_id)
 
             # --- Actually verify the signature ---

@@ -59,10 +59,16 @@ def load_priv_block(block_bytes):
 
 def load_pub_block2(public_part):
     # The public part should have an initial header that indicates whether the first das is a payload or a cert
-    ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, public_part, 0)
+    ppkey, index = expect_key_header([PUB_CSR, PUB_PAYLOAD, PUB_CERTCHAIN], None, public_part, 0)
     public_part = public_part[index:]               # chop off the header
 
+    # PUB_CSR is just a cert by itself
+    if ppkey == PUB_CSR:
+        cert = AttrDict(b3.schema_unpack(CERT_SCHEMA, public_part))
+        return ppkey, cert
+    # PUB_PAYLOAD and PUB_CERTCHAIN are chains.
     # Should be a list of DAS structures, so pythonize the list
+
     chain = list_of_schema_unpack(DATASIG_SCHEMA, [HDR_DAS], public_part)
 
     # unpack the certs & sigs in chain
@@ -78,28 +84,28 @@ def load_pub_block2(public_part):
     return ppkey, chain
 
 
-
-
-def load_pub_block(public_part):
-    # The public part should have an initial header that indicates whether the first das is a payload or a cert
-    ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, public_part, 0)
-    public_part = public_part[index:]               # chop off the header
-
-    # Should be a list of DAS structures, so pythonize the list
-    chain = list_of_schema_unpack(DATASIG_SCHEMA, [HDR_DAS], public_part)
-
-    # unpack the certs & sigs in chain
-    for i, das in enumerate(chain):
-        # dont unpack cert if this is the first das and ppkey is PAYLOAD
-        if i > 0 or ppkey == PUB_CERTCHAIN:
-            das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_part))
-            schema_ensure_mandatory_fields(CERT_SCHEMA, das.cert)
-
-        das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_part))
-        schema_ensure_mandatory_fields(SIG_SCHEMA, das.sig)
-
-    return chain
-
+#
+#
+# def load_pub_block(public_part):
+#     # The public part should have an initial header that indicates whether the first das is a payload or a cert
+#     ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, public_part, 0)
+#     public_part = public_part[index:]               # chop off the header
+#
+#     # Should be a list of DAS structures, so pythonize the list
+#     chain = list_of_schema_unpack(DATASIG_SCHEMA, [HDR_DAS], public_part)
+#
+#     # unpack the certs & sigs in chain
+#     for i, das in enumerate(chain):
+#         # dont unpack cert if this is the first das and ppkey is PAYLOAD
+#         if i > 0 or ppkey == PUB_CERTCHAIN:
+#             das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_part))
+#             schema_ensure_mandatory_fields(CERT_SCHEMA, das.cert)
+#
+#         das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_part))
+#         schema_ensure_mandatory_fields(SIG_SCHEMA, das.sig)
+#
+#     return chain
+#
 
 # --- Structure helper functions ---
 
@@ -174,8 +180,6 @@ def expect_key_header(want_keys, want_type, buf, index):
 
 # Used by the uniloader when someone passes a binary block directly.
 
-
-
 def split_binary_pub_priv(block_in):
     want_keys = [PUB_CSR, PUB_PAYLOAD, PUB_CERTCHAIN, PRIV_CRCWRAPPED, DUALBLOCK]
     key, index = expect_key_header(want_keys, None, block_in, 0)
@@ -188,6 +192,8 @@ def split_binary_pub_priv(block_in):
         return dual["public"], dual["private"]
 
 def combine_binary_pub_priv(pub_block, priv_block):
+    print("combine: pub  len ", len(pub_block))
+    print("combine: priv len ", len(priv_block))
     dbx = dict(public=pub_block, private=priv_block)
     dual_bytes = b3.schema_pack(DUALBLOCK_SCHEMA, dbx)
     return b3.encode_item_joined(DUALBLOCK, b3.DICT, dual_bytes)

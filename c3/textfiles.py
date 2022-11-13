@@ -28,6 +28,10 @@ def asc_header(msg):
     line += "-" * (76 - len(line))
     return line
 
+def make_pub_txt_str_ce(ce, desc, vis_map=None):
+    pub_ff_lines = make_visible_fields(ce.pub_block, vis_map)
+    return make_pub_txt_str(ce.pub_block, ce.name, desc, pub_ff_lines)
+
 def make_pub_txt_str(public_part, name="", desc="", pub_ff_lines=""):
     pub_desc = desc if desc else (name + " - Payload & Public Certs")
     if pub_ff_lines:
@@ -35,9 +39,23 @@ def make_pub_txt_str(public_part, name="", desc="", pub_ff_lines=""):
     pub_str = asc_header(pub_desc) + "\n" + pub_ff_lines + b64_encode(public_part).decode()
     return pub_str
 
+def make_priv_txt_str_ce(ce, desc):     # note no vis_map yet
+    return make_priv_txt_str(ce.epriv_block, ce.name, desc)
+
+def make_priv_txt_str(priv_block, name="", desc=""):
+    priv_desc = (desc or name) + " - PRIVATE Key"
+    priv_str = asc_header(priv_desc) + "\n" + b64_encode(priv_block).decode()
+    return priv_str
+    # if priv_ff_lines:
+    #     priv_ff_lines += "\n"
+    # priv_str = asc_header(priv_desc) + "\n" + priv_ff_lines + b64_encode(private_part).decode()
+
+
 
 def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_ff_lines="", priv_ff_lines=""):
+
     pub_str = make_pub_txt_str(public_part, name, desc, pub_ff_lines)
+
     priv_desc = (desc or name) + " - PRIVATE Key"
     if priv_ff_lines:
         priv_ff_lines += "\n"
@@ -63,6 +81,16 @@ def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_
         with open(fname, "w") as f:
             f.write("\n" + priv_str + "\n")
         print("Wrote PRIVATE file: ", fname)
+
+
+# A combination of make_visible_fields and  write_files
+# make_pub_txt_str
+
+
+
+
+
+
 
 
 
@@ -95,10 +123,6 @@ def split_text_pub_priv(text_in):
             pub_text_block = text_in
 
     return pub_text_block, priv_text_block
-
-
-
-
 
 # So we do the header checks like before, to try and keep public private and combined consistent
 # But then we glue things together if need be and return a single combined always,
@@ -188,7 +212,20 @@ def map_field_names(field_names):
 
 # field_names isn't optional because we wouldn't be here if we weren't making visible fields
 
-def make_visible_fields(block_part, schema, field_names):
+def make_visible_fields(block_part, vis_map):
+    if vis_map and "schema" in vis_map and vis_map["schema"]:
+        schema = vis_map["schema"]
+    else:
+        schema = CERT_SCHEMA
+    # There doesn't have to be a schema in the vis_map, but there DOES have to be a
+    # fields_map in the vis map. Because we're creating, vis_map["fields_map"] is our source of truth.
+    # whereas with check_visible_fields, the lines in the incoming data are mostly the source of truth.
+    if not vis_map or "fields_map" not in vis_map or not vis_map["fields_map"]:
+        print("make_visible_fields: no vis_map")
+        return ""
+    field_names = vis_map["fields_map"]
+
+
     # --- get to that first dict ---
     # Assume standard pub_bytes structure (chain with header)
     # We can't use load() here because load() does mandatory schema checks and we
@@ -325,67 +362,3 @@ def text_to_binary_block(text_part, vis_map=None):
 
     return bytes_part  # success
 
-
-#
-#
-# def load_files(name):
-#     header_rex = r"^-+\[ (.*?) \]-+$"
-#     pub_text_block = ""
-#     priv_text_block = ""
-#     pub_block = b""
-#     priv_block = b""
-#
-#     combine_name = name + ".b64.txt"
-#     if os.path.isfile(combine_name):
-#         print("Loading combined file ", combine_name)
-#         both_strs = open(combine_name, "r").read()
-#
-#         # regex cap the header lines
-#         hdrs = list(re.finditer(header_rex, both_strs, re.MULTILINE))
-#         if len(hdrs) != 2:
-#             print(" Warning: number of headers in combined file is not 2")
-#
-#         # Structure: first header, first data, second header, second data, end of file
-#         # data offsets are start-of-first-header : start-of-second-header,
-#         # because check_visible_fields wants to see the headers too if they are there.
-#         block0_text = both_strs[hdrs[0].start() : hdrs[1].start()]
-#         block1_text = both_strs[hdrs[1].start( ):]
-#
-#         # normally the second block is the private block, but if a user has shuffled things around
-#         # we cater for that by checking which block has 'PRIVATE' in its header description
-#         if "PRIVATE" in hdrs[0].group(1):       # Private block comes first (not the normal case)
-#             pub_text_block, priv_text_block = block1_text, block0_text
-#         else:   # Otherwise assume the public block comes first.
-#             pub_text_block, priv_text_block = block0_text, block1_text
-#
-#     # Enable more-specific files to override the combined file, if both exist
-#
-#     pub_only_name = name + ".public.b64.txt"
-#     if os.path.isfile(pub_only_name):
-#         print("Loading public file ", pub_only_name)
-#         pub_text_block = open(pub_only_name, "r").read()
-#         hdrs = list(re.finditer(header_rex, pub_text_block, re.MULTILINE))
-#         if len(hdrs) != 1:
-#             print(" Warning: too %s headers in public file" % ("many" if len(hdrs ) >1 else "few"))
-#
-#     priv_only_name = name + ".PRIVATE.b64.txt"
-#     if os.path.isfile(priv_only_name):
-#         print("Loading private file ", priv_only_name)
-#         priv_text_block = open(priv_only_name, "r").read()
-#         hdrs = list(re.finditer(header_rex, priv_text_block, re.MULTILINE))
-#         if len(hdrs) != 1:
-#             print(" Warning: too %s headers in public file" % ("many" if len(hdrs) > 1 else "few"))
-#
-#     # Ensure visible (visible) text-fields (if any) match the secure binary info.
-#     # This also extracts and converts the base64 secure block parts.
-#     if pub_text_block:
-#         print("load_files checking pub_block ")
-#         print(repr(pub_text_block))
-#         pub_block = check_structure_vis_fields(pub_text_block, CERT_SCHEMA)
-#
-#     if priv_text_block:
-#         print("load_files checking priv_block")
-#         print(repr(priv_text_block))
-#         priv_block = check_structure_vis_fields(priv_text_block, PRIV_CRCWRAP_SCHEMA)
-#
-#     return pub_block, priv_block
