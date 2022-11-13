@@ -152,6 +152,15 @@ def schema_ensure_mandatory_fields(schema, dx):
                 raise StructureError("Mandatory field '%s' is %r" % (field_name, dx[field_name]))
 
 
+def toplevel_header_key(buf):
+    if not buf:
+        raise StructureError("No data - buffer is empty or None")
+    try:
+        key, data_type, has_data, is_null, data_len, index = b3.decode_header(buf, 0)
+    except (IndexError, UnicodeDecodeError):
+        raise StructureError("Header structure is invalid")  # from None
+    return key
+
 
 # Index and Unicode are the only two unhandled exception types that b3's decode_header code produces when fuzzed.
 # IndexError trying to decode a bad varint for ext_type, datalen or number key.
@@ -210,10 +219,14 @@ def extract_first_dict(part_block, schema):
         private_part = part_block[index:]
         dx0 = AttrDict(b3.schema_unpack(schema, private_part))
     else:           # public part block, using CERT_SCHEMA or a caller's SCHEMA
-        ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, part_block, 0)
+        ppkey, index = expect_key_header([PUB_CSR, PUB_PAYLOAD, PUB_CERTCHAIN], None, part_block, 0)
         public_part = part_block[index:]
-        das0 = list_of_schema_unpack(DATASIG_SCHEMA, [HDR_DAS], public_part)[0]
-        dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
+        if ppkey == PUB_CSR:            # CSRs are just a cert, everything else is a chain of DASes.
+            assert schema == CERT_SCHEMA
+            dx0 = AttrDict(b3.schema_unpack(schema, public_part))
+        else:
+            das0 = list_of_schema_unpack(DATASIG_SCHEMA, [HDR_DAS], public_part)[0]
+            dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
     return dx0
 
 def ensure_not_expired(using_pub):

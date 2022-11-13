@@ -6,7 +6,7 @@ import os, base64, re, functools, datetime
 import b3
 
 from c3 import structure
-from c3.constants import CERT_SCHEMA, PRIV_CRCWRAP_SCHEMA
+from c3.constants import CERT_SCHEMA, PRIV_CRCWRAP_SCHEMA, PUB_PAYLOAD, PUB_CSR, PUB_CERTCHAIN
 from c3.errors import StructureError, TamperError
 
 try:
@@ -28,8 +28,21 @@ def asc_header(msg):
     line += "-" * (76 - len(line))
     return line
 
+
+# if make visible fields is called with a dx0 directly.
+# So cert or payload_dict etc.
+
+# if its a PUB_PAYLOAD going out (ce.pub_type), and user has supplied vis_map, then make vis fields
+# otherwise if its PUB_CSR or PUB_CERTCHAIN one of ours we make em using ce's default_vismap
+# otherwise we do nothing on that front.
+
 def make_pub_txt_str_ce(ce, desc, vis_map=None):
-    pub_ff_lines = make_visible_fields(ce.pub_block, vis_map)
+    pub_ff_lines = ""
+    if ce.pub_type == PUB_PAYLOAD and vis_map:
+        payload_dict = b3.schema_unpack(vis_map["schema"], ce.payload)
+        pub_ff_lines = make_visible_fields(payload_dict, vis_map)
+    if ce.pub_type in (PUB_CSR, PUB_CERTCHAIN):
+        pub_ff_lines = make_visible_fields(ce.cert, ce.default_vismap)
     return make_pub_txt_str(ce.pub_block, ce.name, desc, pub_ff_lines)
 
 def make_pub_txt_str(public_part, name="", desc="", pub_ff_lines=""):
@@ -52,36 +65,36 @@ def make_priv_txt_str(priv_block, name="", desc=""):
 
 
 
-def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_ff_lines="", priv_ff_lines=""):
-
-    pub_str = make_pub_txt_str(public_part, name, desc, pub_ff_lines)
-
-    priv_desc = (desc or name) + " - PRIVATE Key"
-    if priv_ff_lines:
-        priv_ff_lines += "\n"
-    priv_str = asc_header(priv_desc) + "\n" + priv_ff_lines + b64_encode(private_part).decode()
-
-    if combine:
-        fname = name + ".b64.txt"
-        with open(fname, "w") as f:
-            f.write("\n" +pub_str)
-            f.write("\n")
-            f.write(priv_str + "\n")
-        print("Wrote combined file: " ,fname)
-    else:
-        fname = name + ".public.b64.txt"
-        with open(fname, "w") as f:
-            f.write("\n" + pub_str + "\n")
-        print("Wrote public file:  ", fname)
-
-        if not private_part:
-            return
-
-        fname = name + ".PRIVATE.b64.txt"
-        with open(fname, "w") as f:
-            f.write("\n" + priv_str + "\n")
-        print("Wrote PRIVATE file: ", fname)
-
+# def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_ff_lines="", priv_ff_lines=""):
+#
+#     pub_str = make_pub_txt_str(public_part, name, desc, pub_ff_lines)
+#
+#     priv_desc = (desc or name) + " - PRIVATE Key"
+#     if priv_ff_lines:
+#         priv_ff_lines += "\n"
+#     priv_str = asc_header(priv_desc) + "\n" + priv_ff_lines + b64_encode(private_part).decode()
+#
+#     if combine:
+#         fname = name + ".b64.txt"
+#         with open(fname, "w") as f:
+#             f.write("\n" +pub_str)
+#             f.write("\n")
+#             f.write(priv_str + "\n")
+#         print("Wrote combined file: " ,fname)
+#     else:
+#         fname = name + ".public.b64.txt"
+#         with open(fname, "w") as f:
+#             f.write("\n" + pub_str + "\n")
+#         print("Wrote public file:  ", fname)
+#
+#         if not private_part:
+#             return
+#
+#         fname = name + ".PRIVATE.b64.txt"
+#         with open(fname, "w") as f:
+#             f.write("\n" + priv_str + "\n")
+#         print("Wrote PRIVATE file: ", fname)
+#
 
 # A combination of make_visible_fields and  write_files
 # make_pub_txt_str
@@ -210,26 +223,10 @@ def map_field_names(field_names):
 # In: block_part bytes, schema for first dict, field names to output in visible format
 # Out: field names & values as text lines (or exceptions)
 
-# field_names isn't optional because we wouldn't be here if we weren't making visible fields
+def make_visible_fields(dx0, vis_map):
+    schema = vis_map["schema"]
+    field_names = vis_map["field_map"]
 
-def make_visible_fields(block_part, vis_map):
-    if vis_map and "schema" in vis_map and vis_map["schema"]:
-        schema = vis_map["schema"]
-    else:
-        schema = CERT_SCHEMA
-    # There doesn't have to be a schema in the vis_map, but there DOES have to be a
-    # fields_map in the vis map. Because we're creating, vis_map["fields_map"] is our source of truth.
-    # whereas with check_visible_fields, the lines in the incoming data are mostly the source of truth.
-    if not vis_map or "fields_map" not in vis_map or not vis_map["fields_map"]:
-        print("make_visible_fields: no vis_map")
-        return ""
-    field_names = vis_map["fields_map"]
-
-
-    # --- get to that first dict ---
-    # Assume standard pub_bytes structure (chain with header)
-    # We can't use load() here because load() does mandatory schema checks and we
-    dx0 = structure.extract_first_dict(block_part, schema)
     key_names, key_to_visible, _ = map_field_names(field_names)
 
     # --- Cross-check whether wanted fields exist (and map names to types) ---
@@ -286,7 +283,7 @@ def make_visible_fields(block_part, vis_map):
 # Policy: if no vis_map schema assume CERT_SCHEMA.
 # Todo: PRIV_CRCWRAP_SCHEMA etc - peek bytes_part's tag & select schema from that.
 
-def text_to_binary_block(text_part, vis_map=None):
+def text_to_binary_block(text_part):
     # --- Ensure vertical structure is legit ---
     # 1 or no header line (-), immediately followed by 0 or more VF lines ([),
     # immediately followd by base64 then: a mandatory whitespace (e.g empty line)
@@ -301,8 +298,18 @@ def text_to_binary_block(text_part, vis_map=None):
     b64_block = ''.join(b64_lines)
     bytes_part = base64.b64decode(b64_block)
 
-    if not vf_lines:            # No visual-fields, we're done
-        return bytes_part
+    return bytes_part, vf_lines
+
+    # Logic is:
+    # If the first dict is one of our cert dicts, do our default vis_map which is CERT_SCHEMA and the dates & subject name.
+    # ie if PPKEY is PUB_CSR or PUB_CERTCHAIN, do default vis_map,
+    #    if          PUB_PAYLOAD, **** demand caller supply their vis_map, ****
+    #    if anything else, raise an error if vf_lines are present.
+
+    # we need to apply this logic here, and in extract_first_dict, and in the save/out places too.
+
+
+def crosscheck_visible_fields(vf_lines, vis_map, dx0):
 
     # --- Check Visible/Text Fields ----
     if vis_map and "schema" in vis_map and vis_map["schema"]:
@@ -310,12 +317,8 @@ def text_to_binary_block(text_part, vis_map=None):
     else:
         schema = CERT_SCHEMA
     types_by_name = {i[1]: i[0] for i in schema}
-    _, _, visible_to_key = map_field_names(vis_map["fields_map"])
+    _, _, visible_to_key = map_field_names(vis_map["field_map"])
 
-    # --- get to that first dict in the secure block ---
-    # Assume standard pub_bytes structure (chain with header)
-    # Let these just exception out.
-    dx0 = structure.extract_first_dict(bytes_part, schema)
 
     # --- Cross-check each Friendy Field line ---
     for ff in vf_lines:
@@ -360,5 +363,5 @@ def text_to_binary_block(text_part, vis_map=None):
             raise TamperError("Field '%s' visible value %r does not match secure value %r" % (
                 name, val, secure_val))
 
-    return bytes_part  # success
+    return True  # success
 

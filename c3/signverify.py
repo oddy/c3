@@ -79,7 +79,7 @@ class CeOutBoth(object):
 
     def as_text(self, vis_map=None, desc=""):
         pub_str = textfiles.make_pub_txt_str_ce(self.ce, desc, vis_map)
-        priv_str = textfiles.make_priv_txt_str(self.ce, desc, vis_map)
+        priv_str = textfiles.make_priv_txt_str_ce(self.ce, desc)
         return "\n" + pub_str + "\n" + priv_str + "\n"
 
     def write_text_file(self, filename, vis_map=None, desc=""):
@@ -112,7 +112,8 @@ class CertEntry(object):
         self.chain = []
 
         self.vis_map = {}
-
+        self.default_vismap = dict(schema=CERT_SCHEMA,
+                                    field_map=["subject_name", "expiry_date", "issued_date"])
         # Output class instances, so user can go ce.pub.as_text(), ce.both.as_binary() etc.
         self.pub = CeOutPub(self)
         self.priv = CeOutPriv(self)
@@ -163,6 +164,8 @@ class SignVerify(object):
     def load_make_cert_entry(self, text_filename="", text="", block=b"", vis_map=None):
         highlander_check(text_filename, text, block)  # there can be only one of these 3
         ce = CertEntry(self)
+        pub_vf_lines = ""
+        payload_dict = {}
 
         # Note: this if-flow works because text_file, text, and block are mutually exclusive
         # --- LOAD from aguments ---
@@ -172,9 +175,10 @@ class SignVerify(object):
         if text:  # Text is EITHER, public text, private text, or both texts concatenated.
             ce.pub_text, ce.epriv_text = textfiles.split_text_pub_priv(text)
             if ce.pub_text:
-                ce.pub_block = textfiles.text_to_binary_block(ce.pub_text, vis_map)
+                ce.pub_block, pub_vf_lines = textfiles.text_to_binary_block(ce.pub_text)
             if ce.epriv_text:
-                ce.epriv_block = textfiles.text_to_binary_block(ce.epriv_text)
+                ce.epriv_block, _ = textfiles.text_to_binary_block(ce.epriv_text)
+                # Note: ignoreing vf_lines for private text atm.
 
         if block:
             ce.pub_block, ce.epriv_block = structure.split_binary_pub_priv(block)
@@ -192,13 +196,23 @@ class SignVerify(object):
         if ce.pub_type == PUB_CSR:      # CSRs are just a cert
             ce.cert = thingy                # we're mixing cert-level stuff with CE-level stuff
             ce.name = ce.cert.subject_name      # noqa a bit here, so there are double-ups.
+            if pub_vf_lines:        # tamper check public Visible Fields if any
+                textfiles.crosscheck_visible_fields(pub_vf_lines, ce.default_vismap, ce.cert)
         if ce.pub_type == PUB_CERTCHAIN:
             ce.chain = thingy
             ce.name = ce.chain[0].cert.subject_name
             ce.cert = ce.chain[0].cert
+            if pub_vf_lines:        # tamper check public Visible Fields if any
+                textfiles.crosscheck_visible_fields(pub_vf_lines, ce.default_vismap, ce.cert)
         if ce.pub_type == PUB_PAYLOAD:          # note: no name, no cert
             ce.chain = thingy
             ce.payload = ce.chain[0].data_part
+            # tamper check user Visible Fields if any. User-supplied schema is required.
+            if pub_vf_lines:
+                if not vis_map or "schema" not in vis_map or not vis_map["schema"]:
+                    raise StructureError("Payload visible fields present but no schema supplied")
+                payload_dict = AttrDict(b3.schema_unpack(vis_map["schema"], ce.payload))
+                textfiles.crosscheck_visible_fields(pub_vf_lines, vis_map, payload_dict)
 
         return ce
 
