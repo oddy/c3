@@ -46,7 +46,12 @@ def make_pub_txt_str_ce(ce, desc, vis_map=None):
     return make_pub_txt_str(ce.pub_block, ce.name, desc, pub_ff_lines)
 
 def make_pub_txt_str(public_part, name="", desc="", pub_ff_lines=""):
-    pub_desc = desc if desc else (name + " - Payload & Public Certs")
+    pub_desc = "Payload / Cert chain"
+    if name:
+        pub_desc = name + " - " + pub_desc
+    if desc:
+        pub_desc = desc
+
     if pub_ff_lines:
         pub_ff_lines += "\n"
     pub_str = asc_header(pub_desc) + "\n" + pub_ff_lines + b64_encode(public_part).decode()

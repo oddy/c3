@@ -201,8 +201,6 @@ def split_binary_pub_priv(block_in):
         return dual["public"], dual["private"]
 
 def combine_binary_pub_priv(pub_block, priv_block):
-    print("combine: pub  len ", len(pub_block))
-    print("combine: priv len ", len(priv_block))
     dbx = dict(public=pub_block, private=priv_block)
     dual_bytes = b3.schema_pack(DUALBLOCK_SCHEMA, dbx)
     return b3.encode_item_joined(DUALBLOCK, b3.DICT, dual_bytes)

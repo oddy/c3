@@ -53,22 +53,150 @@ def test_csr_roundtrip_text_strip_vf(c3m):
 
 
 
+def test_ss_roundtrip_binary(c3m):
+    ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
+    assert ce1.pub_type == PUB_CSR
+    c3m.sign(ce1, ce1)
+    assert ce1.pub_type == PUB_CERTCHAIN
+    ce1_bin = ce1.both.as_binary()
+    ce2 = c3m.load_make_cert_entry(block=ce1_bin)
+    ce2_bin = ce2.both.as_binary()
+    assert ce1_bin == ce2_bin
 
-def test_selfsign_roundtrip_binary(c3m):
+
+def test_ss_verify_binary(c3m):
     ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
     c3m.sign(ce1, ce1)
-    dual_bytes = ce1.both.as_binary()
+    ce1_bin = ce1.both.as_binary()
 
-    c3m.load_trusted_cert(block=dual_bytes)
-    ce2 = c3m.load_make_cert_entry(block=dual_bytes)
+    c3m.load_trusted_cert(block=ce1_bin)
+    ce2 = c3m.load_make_cert_entry(block=ce1_bin)
     assert c3m.verify2(ce2) is True
 
+# Confirmed here that default CERT visfields are saving and loading
+def test_ss_verify_text(c3m):
+    ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
+    c3m.sign(ce1, ce1)
+    ce1_txt = ce1.both.as_text()
+    c3m.load_trusted_cert(text=ce1_txt)
+    ce2 = c3m.load_make_cert_entry(text=ce1_txt)
+    assert c3m.verify2(ce2) is True
 
-# def test_selfsign_text_roundtrip(c3m):
-#     ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
-#     c3m.sign(ce1, ce1)
-#     dual_bytes = ce1.both.as_binary()
-#
-#     c3m.load_trusted_cert(block=dual_bytes)
-#     ce2 = c3m.load_make_cert_entry(block=dual_bytes)
-#     assert c3m.verify2(ce2) is True
+# ----- Inter cert signing / verifying ----
+
+# Note: CEs must come in via load() for full chain-unpacking, dont use them directly.
+
+def test_inter_sign_verify(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    c3m.sign(selfsigned, selfsigned)
+
+    inter = c3m.make_csr(name="inter2", expiry_text="24 oct 2024")
+    assert inter.pub_type == PUB_CSR
+    c3m.sign(inter, selfsigned)
+    assert inter.pub_type == PUB_CERTCHAIN
+
+    c3m.load_trusted_cert(block=selfsigned.pub.as_binary())
+    inter2 = c3m.load_make_cert_entry(block=inter.pub.as_binary())
+    assert c3m.verify2(inter2) is True
+
+# ----- Payload signing / verifying ----
+
+def test_payload_sign_verify(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    c3m.sign(selfsigned, selfsigned)
+
+    payload = b"Hello i am a payload"
+    pce = c3m.make_payload(payload)
+    assert pce.pub_type == BARE_PAYLOAD
+    c3m.sign(pce, selfsigned)
+    assert pce.pub_type == PUB_PAYLOAD
+
+    c3m.load_trusted_cert(block=selfsigned.pub.as_binary())
+    pce2 = c3m.load_make_cert_entry(block=pce.pub.as_binary())
+    assert c3m.verify2(pce2) is True
+
+
+# ---- Sign using intermediate ----
+
+def test_payload_sign_intermediate(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    c3m.sign(selfsigned, selfsigned)
+    inter = c3m.make_csr(name="inter2", expiry_text="24 oct 2024")
+    c3m.sign(inter, selfsigned)
+    payload = b"Hello i am a payload"
+    pce = c3m.make_payload(payload)
+    c3m.sign(pce, inter)
+    pce_bin = pce.pub.as_binary()
+    # --------------------------------------------------------------
+    c3m.load_trusted_cert(block=selfsigned.pub.as_binary())
+    pce2 = c3m.load_make_cert_entry(block=pce_bin)
+    assert c3m.verify2(pce2) is True
+
+
+# ----- Visible fields for custom payloads -----
+LI_SCHEMA = (
+    (b3.UTF8, "typ", 0, True),   # "License type"
+    (b3.UTF8, "org", 4, False),  # "Organization"
+    (b3.UTF8, "hostnames", 5, False),  # "Hostnames"
+)
+LI_VISFIELDS = [ ["org", "Organization"], "hostnames", ["typ", "License Type"] ]
+LI_VISMAP = dict(schema=LI_SCHEMA, field_map=LI_VISFIELDS)
+
+def test_payload_verify_text(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    c3m.sign(selfsigned, selfsigned)
+    payload_d = dict(typ="type 1", org="Hello Ltd", hostnames="fred")
+    payload = b3.schema_pack(LI_SCHEMA, payload_d)
+    pce = c3m.make_payload(payload)
+    c3m.sign(pce, selfsigned)
+    pce_txt = pce.pub.as_text()
+    c3m.load_trusted_cert(block=selfsigned.pub.as_binary())
+    pce2 = c3m.load_make_cert_entry(text=pce_txt)
+    assert c3m.verify2(pce2) is True
+
+
+def test_payload_verify_text_visfields_noschema(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    c3m.sign(selfsigned, selfsigned)
+    payload_d = dict(typ="type 1", org="Hello Ltd", hostnames="fred")
+    payload = b3.schema_pack(LI_SCHEMA, payload_d)
+    pce = c3m.make_payload(payload)
+    c3m.sign(pce, selfsigned)
+    pce_txt = pce.pub.as_text(vis_map=LI_VISMAP)
+    c3m.load_trusted_cert(block=selfsigned.pub.as_binary())
+    # Load needs to be supplied the vis_map, if there are visible fields incoming,
+    # otherwise load can't tamper-check the visible fields.
+    with pytest.raises(StructureError, match="schema unknown"):
+        c3m.load_make_cert_entry(text=pce_txt)
+
+
+def test_payload_verify_text_visfields(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    c3m.sign(selfsigned, selfsigned)
+    payload_d = dict(typ="type 1", org="Hello Ltd", hostnames="fred")
+    payload = b3.schema_pack(LI_SCHEMA, payload_d)
+    pce = c3m.make_payload(payload)
+    c3m.sign(pce, selfsigned)
+    pce_txt = pce.pub.as_text(vis_map=LI_VISMAP)
+    c3m.load_trusted_cert(block=selfsigned.pub.as_binary())
+    pce2 = c3m.load_make_cert_entry(text=pce_txt, vis_map=LI_VISMAP)
+    assert c3m.verify2(pce2) is True
+
+
+def test_payload_verify_text_visfields_tamper(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    c3m.sign(selfsigned, selfsigned)
+    payload_d = dict(typ="type 1", org="Hello Ltd", hostnames="fred")
+    payload = b3.schema_pack(LI_SCHEMA, payload_d)
+    pce = c3m.make_payload(payload)
+    c3m.sign(pce, selfsigned)
+    pce_txt = pce.pub.as_text(vis_map=LI_VISMAP)
+    pce_txt = pce_txt.replace("fred","albert")      # change visible field value
+    c3m.load_trusted_cert(block=selfsigned.pub.as_binary())
+    with pytest.raises(TamperError, match="fred"):
+        c3m.load_make_cert_entry(text=pce_txt, vis_map=LI_VISMAP)
+
+
+
+
+

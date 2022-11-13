@@ -210,7 +210,8 @@ class SignVerify(object):
             # tamper check user Visible Fields if any. User-supplied schema is required.
             if pub_vf_lines:
                 if not vis_map or "schema" not in vis_map or not vis_map["schema"]:
-                    raise StructureError("Payload visible fields present but no schema supplied")
+                    helpm = ". (please supply vis_map= to load() function)"
+                    raise StructureError("Payload has visible fields but schema unknown" + helpm)
                 payload_dict = AttrDict(b3.schema_unpack(vis_map["schema"], ce.payload))
                 textfiles.crosscheck_visible_fields(pub_vf_lines, vis_map, payload_dict)
 
@@ -349,19 +350,23 @@ class SignVerify(object):
     # 2) Named cert not found - in the cert store / trust store / certs_by_name etc
     # 3) Last cert is self-signed and verifies OK but isn't in the trust store. (Untrusted Chain)
 
+    # Note: CEs to verify MUST come from load() (ie not directly from make_csr+sign when testing)
+    #       because load() fully unpacks the chain for verify to inspect.
+
     def verify2(self, ce):
         chain = ce.chain
         if not chain:
             raise ValueError("Cannot verify - no cert chain present")
-        return self.verify(chain)
+        if "sig" not in chain[0]:
+            raise ValueError("Cannot verify - CE must be load()ed first")
+        return self.verify__w(chain)
 
-    def verify(self, chain):
+    def verify__w(self, chain):
         certs_by_id = {das.cert.cert_id : das.cert for das in chain if "cert" in das}
         found_in_trusted = False         # whether we have established a link to the trusted_ces
 
         for i, das in enumerate(chain):
             signing_cert_id = das.sig.signing_cert_id
-            print("====== Chain DAS signing_cert_id: ",signing_cert_id)
             # --- Find the 'next cert' ie the one which verifies our signature ---
             if not signing_cert_id:
                 # --- no signing-id means "next cert in the chain" ---
