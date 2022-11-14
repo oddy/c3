@@ -21,6 +21,8 @@ class TamperError(VerifyError):     # visible Fields are present in the textual 
     pass                             #   but don't match up with the secure fields
 class SignError(C3Error):
     pass
+class OutputError(C3Error):         # cant output a CE for some reason - usually bc private key not encrypted
+    pass
 class CertExpired(SignError):       # can't sign, --using's cert has expired.
     pass
 

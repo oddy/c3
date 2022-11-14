@@ -115,7 +115,6 @@ def test_payload_sign_verify(c3m):
     pce2 = c3m.load_make_cert_entry(block=pce.pub.as_binary())
     assert c3m.verify2(pce2) is True
 
-
 # ---- Sign using intermediate ----
 
 def test_payload_sign_intermediate(c3m):
@@ -131,6 +130,51 @@ def test_payload_sign_intermediate(c3m):
     c3m.load_trusted_cert(block=selfsigned.pub.as_binary())
     pce2 = c3m.load_make_cert_entry(block=pce_bin)
     assert c3m.verify2(pce2) is True
+
+
+
+
+# --- load-to-sign (instead of make_csr-to-sign ---
+
+def test_load_to_sign(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    c3m.sign(selfsigned, selfsigned)
+    c3m.private_key_set_nopassword(selfsigned)
+    ss2 = c3m.load_make_cert_entry(block=selfsigned.both.as_binary())
+    inter = c3m.make_csr(name="inter2", expiry_text="24 oct 2024")
+    c3m.sign(inter, ss2)
+
+# --- Didn't set the priv key bare (or encrypt) ---
+
+def test_load_to_sign_priv_key_unset(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    c3m.sign(selfsigned, selfsigned)
+    with pytest.raises(OutputError):
+        ss_bin = selfsigned.both.as_binary()
+
+
+# ---- Private key encrypt/decrypt (password in code) ---
+
+def test_privkey_encrypt(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    c3m.sign(selfsigned, selfsigned)
+    #c3m.private_key_encrypt(selfsigned, "hunter2")
+    c3m.private_key_set_nopassword(selfsigned)
+
+    ss2 = c3m.load_make_cert_entry(block=selfsigned.both.as_binary())
+    c3m.private_key_decrypt(ss2, "hunter2")
+    inter = c3m.make_csr(name="inter2", expiry_text="24 oct 2024")
+
+    c3m.sign(inter, ss2)
+
+
+
+
+
+
+
+
+
 
 
 # ----- Visible fields for custom payloads -----
@@ -196,6 +240,10 @@ def test_payload_verify_text_visfields_tamper(c3m):
     with pytest.raises(TamperError, match="fred"):
         c3m.load_make_cert_entry(text=pce_txt, vis_map=LI_VISMAP)
 
+
+# ----------- Encrypt decrypt private key behaviour ----------------
+
+# We want the user to have to explicitely say they want a bare key.
 
 
 

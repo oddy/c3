@@ -14,6 +14,19 @@ from c3 import textfiles
 from c3 import commandline
 from c3.structure import AttrDict
 
+# TODO TODO TODO
+# Ok, SignVerify spawns the CEs. So the user can treat CEs as just an opaque handle if they want.
+# So load, make_csr and make_payload all belong to signverify and create CEs.
+# So no fancy CE constructor.
+
+# Apart from that, put as much as possible into the CE and out of Signverify.
+# then we still have to port user_encrypt and decrypt priv key.
+# then port commandline.
+# then the tests.
+# Then we're done.
+# TODO TODO TODO
+
+
 # Consider the "Store everything in a smart object" approach so that we can get the **APIs usable**
 # Because the library user not losing their mind trying to use us, is more important than some
 # memory usage double-ups, and just adding fields to a smart-object stops us *bogging down on that front*
@@ -59,10 +72,14 @@ class CeOutPriv(object):
         self.ce = ce_parent
 
     def as_binary(self):
+        if not self.ce.epriv_block:
+            raise OutputError("Please encrypt() or nopassword() the private key")
         return self.ce.epriv_block
 
     def as_text(self, vis_map=None, desc=""):
-        return textfiles.make_priv_txt_str(self.ce, desc, vis_map)
+        if not self.ce.epriv_block:
+            raise OutputError("Please encrypt() or nopassword() the private key")
+        return textfiles.make_priv_txt_str_ce(self.ce, desc, vis_map)
 
     def write_text_file(self, filename, vis_map=None, desc=""):
         txt = self.as_text(vis_map, desc)
@@ -75,9 +92,14 @@ class CeOutBoth(object):
         self.ce = ce_parent
 
     def as_binary(self):
+        print("jhel")
+        if not self.ce.epriv_block:
+            raise OutputError("Please encrypt() or nopassword() the private key")
         return structure.combine_binary_pub_priv(self.ce.pub_block, self.ce.epriv_block)
 
     def as_text(self, vis_map=None, desc=""):
+        if not self.ce.epriv_block:
+            raise OutputError("Please encrypt() or nopassword() the private key")
         pub_str = textfiles.make_pub_txt_str_ce(self.ce, desc, vis_map)
         priv_str = textfiles.make_priv_txt_str_ce(self.ce, desc)
         return "\n" + pub_str + "\n" + priv_str + "\n"
@@ -184,12 +206,14 @@ class SignVerify(object):
             ce.pub_block, ce.epriv_block = structure.split_binary_pub_priv(block)
 
         # --- Unpack binary blocks ---
+        if not ce.pub_block:            # only bare-payload "CE"s dont have a public part, and they
+            raise ValueError("Load: public block is missing")  # dont come through here, so.
+
         if ce.epriv_block:
             ce.priv_d = structure.load_priv_block(ce.epriv_block)
-            ce.priv_key_bytes = self.decrypt_private_key(ce.priv_d) # noqa -ide whinge about priv_d
-
-        if not ce.pub_block:            # only bare-payload "CE"s dont have a public part, and they
-            raise ValueError("Load: public part is missing")  # dont come through here, so
+            if ce.priv_d.priv_type == PRIVTYPE_BARE:    # load automatically if the supplier
+                ce.priv_key_bytes = ce.priv_d.priv_data  # didnt care about securing it.
+            # if it IS encrypted, do nothing. Caller must call decrypt(), otherwise sign() will fail.
 
         # todo: merge this with load_pub_block2
         ce.pub_type, thingy = structure.load_pub_block2(ce.pub_block)
@@ -259,10 +283,8 @@ class SignVerify(object):
                            key_type=KT_ECDSA_PRIME256V1, expiry_date=expiry)
 
         ce.priv_key_bytes = key_priv
-        ce.epriv_block = structure.make_priv_block(key_priv, bare=True)
-        # Make an 'encrypted private key structure' that is actually a bare (unencrypted) key.
-        # Call encrypt_private_key_ce(ce) later to replace .epriv_block with the encrypted version.
-        # Do this "last" so as not to inconvenience the user.  (e.g. after self-sign)
+        # Note: we don't set ce.epriv_block here, user must call encrypt() or nopassword() to make
+        #       that happen, and we wont save without one of them happening.
 
         # All the exportable (as_binary etc) pub_blocks are serializations of ce.chain, except for
         # CSRs, which are serializations of ce.cert.
@@ -299,9 +321,11 @@ class SignVerify(object):
         if ce.payload:
             payload = ce.payload
         if not payload:
-            raise ValueError("Sign error: no cert or payload found to sign")
+            raise SignError("No cert or payload found to sign")
         if not signer.priv_key_bytes:
-            raise ValueError("Sign error: given signer has no private key to sign with")
+            raise SignError("Please decrypt the signer's private key first")
+        # Note: we can't gate on existence of epriv_block first, because e.g. selfsigned CSRs dont have one.
+
 
         # perform sign with key, get signature bytes
         key_type = signer.cert.key_type
@@ -549,6 +573,57 @@ class SignVerify(object):
 
 
     # ============== Private key encrypt/decrypt ===================================================
+
+
+    # Encrypt-side
+
+    def private_key_encrypt(self, ce, password):
+        if not ce.priv_key_bytes:
+            raise ValueError("CE has no private key bytes")
+        epriv_bytes = self.pass_protect.SinglePassEncrypt(ce.priv_key_bytes, password)
+        ce.epriv_block = structure.make_priv_block(epriv_bytes, bare=False)
+        return
+
+    def private_key_encrypt_user(self, ce):
+        if not ce.priv_key_bytes:
+            raise ValueError("CE has no private key bytes")
+
+        return
+
+    def private_key_set_nopassword(self, ce):
+        if not ce.priv_key_bytes:
+            raise ValueError("CE has no private key bytes")
+        ce.epriv_block = structure.make_priv_block(ce.priv_key_bytes, bare=True)
+
+
+
+    def private_key_decrypt(self, ce, password):
+        # already have priv_d from load() calling structure.load_priv_block
+        if ce.priv_d.priv_type == PRIVTYPE_BARE:    # just in case the user calls us when they're not
+            ce.priv_key_bytes = ce.priv_d.priv_data  # supposed to (e.g. a bare key was loaded)
+            return   # be good about it anyway so the user doesn't have to special case things.
+
+        if ce.priv_d.priv_type != PRIVTYPE_PASS_PROTECT:
+            raise StructureError("Private key is encrypted with an unknown encryption")
+        if not self.pass_protect:       # usually because could not find libsodium DLL
+            raise RuntimeError(self.load_error)
+        if self.pass_protect.DualPasswordsNeeded(ce.priv_d.priv_data):  # todo: we dont support this here yet
+            raise NotImplementedError("Private key wants dual passwords")
+
+        priv_ret = self.pass_protect.SinglePassDecrypt(ce.priv_d.priv_data, password)
+        ce.priv_key_bytes = priv_ret
+
+
+    def private_key_decrypt_user(self, ce):
+        return
+
+    # Note: there is no inverse for private_key_nopassword because
+    #       incoming BARE keys are handled directly by load()
+
+
+
+
+    # ------------------ OLD api -----------------------
 
     # NOTE that these interact with the user (password entry)
     #         and use a pass_protect object which needs startup initialisation (load libsodium)
