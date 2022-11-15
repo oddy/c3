@@ -422,115 +422,6 @@ class SignVerify(object):
             return True
         raise UntrustedChainError("Chain does not link to trusted certs")
 
-    # --- in-ram trust store for Verify's trust anchors. ---
-
-    def add_trusted_certs(self, certs_bytes, force=False):
-        cert_chain = structure.load_pub_block(certs_bytes)
-        if not force:
-            try:
-                self.verify(cert_chain)
-            except UntrustedChainError:   # ignore this one failure mode because we havent installed
-                pass                      # this/these certs yet!
-        for das in cert_chain:
-            if "cert" not in das:         # skip payload if there is one
-                continue
-            self.trusted_ces[das.cert.cert_id] = das.cert
-        return
-
-
-    # ============ Signing =========================================================================
-
-    #               |     no payload             payload
-    #  -------------+-------------------------------------------------
-    #  using cert   |     make chain signer      sign payload
-    #               |
-    #  using self   |     make self signer       ERROR invalid state
-
-    # The way sign combines things, we get bytes out.
-    # Cannot be seperated like load and verify are, nor do we want to.
-
-    # In: a cert name and/or payload, and a cert/keypair to use to sign with (if applicable)
-    # Out: public_part BLOCK, private key BYTES
-    # Note: incoming and outgoing privs are vare, caller must encrypt/decrypt.
-
-    def make_sign(self, action, name="", payload=b"", using_priv=b"", using_pub=b"", using_name="", expiry=None, link=LINK_APPEND):
-        # using_pub must now always be present unless MAKE_SELFSIGNED
-        if action != MAKE_SELFSIGNED:
-            if not using_pub:
-                raise ValueError("please supply public part of --using")
-            # Make sure the signing cert hasn't expired!
-            structure.ensure_not_expired(using_pub)
-            # Make sure the keypair really is a keypair
-            self.keys_check_privpub_match(using_priv, using_pub)
-
-        # sanity check expiry, needed for selfsign and intermediate
-        if action in (MAKE_INTERMEDIATE, MAKE_SELFSIGNED):
-            if not expiry:
-                raise ValueError("creating cert: please provide expiry date")
-
-        # Policy: for now, cert_id and subject name are the same.  Consider ULID in future.
-        cert_id = name.encode("ascii")
-        using_id = using_name.encode("ascii")
-        new_key_priv = None
-
-        # --- Key gen if applicable ---
-        if action in (MAKE_SELFSIGNED, MAKE_INTERMEDIATE):
-            # make keys
-            new_key_priv, new_key_pub = self.keys_generate()
-            # make pub cert for pub key
-
-            today = datetime.date.today()
-            new_pub_cert = AttrDict(
-                public_key=new_key_pub, subject_name=name, cert_id=cert_id, issued_date=today,
-                key_type=KT_ECDSA_PRIME256V1, expiry_date=expiry
-            )
-            new_pub_cert_bytes = b3.schema_pack(CERT_SCHEMA, new_pub_cert)
-            payload_bytes = new_pub_cert_bytes
-        # --- Load payload if not key-genning ---
-        else:
-            payload_bytes = payload
-
-        if action == MAKE_SELFSIGNED:
-            # --- Sign the cert using its own private key ---
-            SK = ecdsa.SigningKey.from_string(new_key_priv, ecdsa.NIST256p)
-            sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=cert_id)
-
-        else:
-            # --- Sign the thing (cert or payload) using Using, if not selfsign ----
-            SK = ecdsa.SigningKey.from_string(using_priv, ecdsa.NIST256p)
-            sig_d = AttrDict(signature=SK.sign(payload_bytes), signing_cert_id=using_id)
-            # note  ^^^ signing_cert_id can be blank, in which case using_pub should have bytes to append
-
-        sig_part = b3.schema_pack(SIG_SCHEMA, sig_d)
-
-        # --- Make data-and-sig structure ---
-        das = AttrDict(data_part=payload_bytes, sig_part=sig_part)
-        das_bytes = b3.schema_pack(DATASIG_SCHEMA, das)
-
-        # --- prepend header for das itself so straight concatenation makes a list-of-das ---
-        das_bytes_with_hdr = b3.encode_item_joined(HDR_DAS, b3.DICT, das_bytes)
-
-        # --- Append Using's public_part (the chain) if applicable ---
-        if link == LINK_APPEND and action != MAKE_SELFSIGNED:
-            # we need to:
-            # 1) strip using_public_part's public_part header,
-            # (This should also ensure someone doesn't try to use a payload cert chain instead of a signer cert chain to sign things)
-            _, index = structure.expect_key_header([PUB_CERTCHAIN], b3.LIST, using_pub, 0)
-            using_pub = using_pub[index:]
-            # 2) concat our data + using_public_part's data
-            out_public_part = das_bytes_with_hdr + using_pub
-        else:
-            out_public_part = das_bytes_with_hdr
-
-        # --- Prepend a new overall public_part header & return pub & private bytes ---
-        if action == SIGN_PAYLOAD:
-            key_type = PUB_PAYLOAD
-        else:
-            key_type = PUB_CERTCHAIN
-        out_public_with_hdr = b3.encode_item_joined(key_type, b3.LIST, out_public_part)
-
-        return out_public_with_hdr, new_key_priv
-
 
     # ========== Signing Key stuff ====================
 
@@ -576,32 +467,41 @@ class SignVerify(object):
 
 
     # Encrypt-side
-
-    def private_key_encrypt(self, ce, password):
+    def private_key_encrypt_sanity_checks(self, ce):
         if not ce.priv_key_bytes:
             raise ValueError("CE has no private key bytes")
+        if not self.pass_protect:
+            raise RuntimeError(self.load_error)
+
+    def private_key_encrypt(self, ce, password):
+        self.private_key_encrypt_sanity_checks(ce)
         epriv_bytes = self.pass_protect.SinglePassEncrypt(ce.priv_key_bytes, password)
         ce.epriv_block = structure.make_priv_block(epriv_bytes, bare=False)
         return
 
     def private_key_encrypt_user(self, ce):
-        if not ce.priv_key_bytes:
-            raise ValueError("CE has no private key bytes")
-
-        return
+        self.private_key_encrypt_sanity_checks(ce)
+        prompt1 = "Enter password to set on private key > "
+        prompt2 = "Re-enter private key password        > "
+        passw = getpassword.get_double_enter_setting_password(prompt1, prompt2)
+        if not passw:
+            raise ValueError("No password supplied, exiting")
+        epriv_bytes = self.pass_protect.SinglePassEncrypt(ce.priv_key_bytes, passw)
+        ce.epriv_block = structure.make_priv_block(epriv_bytes, bare=False)
 
     def private_key_set_nopassword(self, ce):
-        if not ce.priv_key_bytes:
-            raise ValueError("CE has no private key bytes")
+        self.private_key_encrypt_sanity_checks(ce)
         ce.epriv_block = structure.make_priv_block(ce.priv_key_bytes, bare=True)
 
 
+    # sanity checks first. Then user activity. Then execute decrypt.
 
-    def private_key_decrypt(self, ce, password):
+    # out: True - dealt with it (BARE), False= password still needs doing.
+    def private_key_decrypt_sanity_checks(self, ce):
         # already have priv_d from load() calling structure.load_priv_block
         if ce.priv_d.priv_type == PRIVTYPE_BARE:    # just in case the user calls us when they're not
             ce.priv_key_bytes = ce.priv_d.priv_data  # supposed to (e.g. a bare key was loaded)
-            return   # be good about it anyway so the user doesn't have to special case things.
+            return True   # be good about it anyway so the user doesn't have to special case things.
 
         if ce.priv_d.priv_type != PRIVTYPE_PASS_PROTECT:
             raise StructureError("Private key is encrypted with an unknown encryption")
@@ -609,66 +509,26 @@ class SignVerify(object):
             raise RuntimeError(self.load_error)
         if self.pass_protect.DualPasswordsNeeded(ce.priv_d.priv_data):  # todo: we dont support this here yet
             raise NotImplementedError("Private key wants dual passwords")
+        return False
 
+
+    def private_key_decrypt(self, ce, password):
+        if self.private_key_decrypt_sanity_checks(ce):    # true = we're done (e.g BARE)
+            return
         priv_ret = self.pass_protect.SinglePassDecrypt(ce.priv_d.priv_data, password)
         ce.priv_key_bytes = priv_ret
 
 
     def private_key_decrypt_user(self, ce):
-        return
-
-    # Note: there is no inverse for private_key_nopassword because
-    #       incoming BARE keys are handled directly by load()
-
-
-
-
-    # ------------------ OLD api -----------------------
-
-    # NOTE that these interact with the user (password entry)
-    #         and use a pass_protect object which needs startup initialisation (load libsodium)
-
-    def encrypt_private_key_ce(self, ce):
-        if not ce.priv_key_bytes:
-            raise ValueError("CE has no private key bytes")
-        epriv_bytes = self.encrypt_private_key(ce.priv_key_bytes)
-        ce.epriv_block = structure.make_priv_block(epriv_bytes, bare=False)
-
-    # In:  private key bytes  (and possibly user entering a password interactively)
-    # Out: encrypted private key bytes
-
-    def encrypt_private_key(self, priv_bytes):
-        if not self.pass_protect:
-            raise RuntimeError(self.load_error)
-        prompt1 = "Enter password to set on private key > "
-        prompt2 = "Re-enter private key password        > "
-        passw = getpassword.get_double_enter_setting_password(prompt1, prompt2)
-        if not passw:
-            raise ValueError("No password supplied, exiting")
-        epriv_bytes = self.pass_protect.SinglePassEncrypt(priv_bytes, passw)
-        return epriv_bytes
-
-    # In: dict from load_priv_block
-    # Out: private key bytes for make_sign to use
-
-    def decrypt_private_key(self, privd):
-        if privd.priv_type == PRIVTYPE_BARE:
-            return privd.priv_data
-        if privd.priv_type != PRIVTYPE_PASS_PROTECT:
-            raise StructureError \
-                ("Unknown privtype %d in priv block (wanted %r)" % (privd.priv_type, KNOWN_PRIVTYPES))
-        if not self.pass_protect:       # usually because could not find libsodium DLL
-            raise RuntimeError(self.load_error)
-        if self.pass_protect.DualPasswordsNeeded \
-                (privd.priv_data):  # todo: we dont support this here yet
-            raise NotImplementedError("Private key wants dual passwords")
-
+        if self.private_key_decrypt_sanity_checks(ce):     # true = we're done (e.g BARE)
+            return
         # --- Try password from environment variables ---
         passw = getpassword.get_env_password()
         if passw:
-            priv_ret = self.pass_protect.SinglePassDecrypt(privd.priv_data, passw)
+            priv_ret = self.pass_protect.SinglePassDecrypt(ce.priv_d.priv_data, passw)
             # Note exceptions are propagated right out here, its an exit if this decrypt fails.
-            return priv_ret
+            ce.priv_key_bytes = priv_ret
+            return
 
         # --- Try password from user ---
         prompt = "Password to unlock private key: "
@@ -679,11 +539,15 @@ class SignVerify(object):
                 raise ValueError("No password supplied, exiting")
 
             try:
-                priv_ret = self.pass_protect.SinglePassDecrypt(privd.priv_data, passw)
+                priv_ret = self.pass_protect.SinglePassDecrypt(ce.priv_d.priv_data, passw)
             except Exception as e:
                 print("Failed decrypting private key: ", str(e))
                 continue        # let user try again
-        return priv_ret
+        ce.priv_key_bytes = priv_ret
+        return
+
+    # Note: there is no inverse for private_key_nopassword because
+    #       incoming BARE keys are handled directly by load()
 
 
 
