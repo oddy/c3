@@ -14,11 +14,12 @@ try:
 except AttributeError:                  # py2
     b64_encode = base64.encodestring    # py2
 
-# ============================== File Saving/Loading ===========================================
+# Policy: The overall policy governing Source of Truth is this:
+#         The binary blocks are fully self-describing, and are the canonical source of truth
+#         for everything. With one exception: the "PRIVATE" in the text header lines
+#         Controls which piece of base64 is decoded to priv_block and which to pub_block
 
-# Policy: look for name.PRIVATE and name.PUBLIC (.b64.txt)
-# Policy: split trumps combined.
-# Policy: Return "" for private_part if there is none, callers can validate
+# ============================== File Saving/Loading ===========================================
 
 def asc_header(msg):
     m2 = "[ %s ]" % msg
@@ -28,13 +29,9 @@ def asc_header(msg):
     line += "-" * (76 - len(line))
     return line
 
-
-# if make visible fields is called with a dx0 directly.
-# So cert or payload_dict etc.
-
+# Policy: generating Visible Fields-
 # if its a PUB_PAYLOAD going out (ce.pub_type), and user has supplied vis_map, then make vis fields
 # otherwise if its PUB_CSR or PUB_CERTCHAIN one of ours we make em using ce's default_vismap
-# otherwise we do nothing on that front.
 
 def make_pub_txt_str_ce(ce, desc, vis_map=None):
     pub_ff_lines = ""
@@ -67,49 +64,6 @@ def make_priv_txt_str(priv_block, name="", desc=""):
     # if priv_ff_lines:
     #     priv_ff_lines += "\n"
     # priv_str = asc_header(priv_desc) + "\n" + priv_ff_lines + b64_encode(private_part).decode()
-
-
-
-# def write_files(name, public_part, private_part=b"", combine=True, desc="", pub_ff_lines="", priv_ff_lines=""):
-#
-#     pub_str = make_pub_txt_str(public_part, name, desc, pub_ff_lines)
-#
-#     priv_desc = (desc or name) + " - PRIVATE Key"
-#     if priv_ff_lines:
-#         priv_ff_lines += "\n"
-#     priv_str = asc_header(priv_desc) + "\n" + priv_ff_lines + b64_encode(private_part).decode()
-#
-#     if combine:
-#         fname = name + ".b64.txt"
-#         with open(fname, "w") as f:
-#             f.write("\n" +pub_str)
-#             f.write("\n")
-#             f.write(priv_str + "\n")
-#         print("Wrote combined file: " ,fname)
-#     else:
-#         fname = name + ".public.b64.txt"
-#         with open(fname, "w") as f:
-#             f.write("\n" + pub_str + "\n")
-#         print("Wrote public file:  ", fname)
-#
-#         if not private_part:
-#             return
-#
-#         fname = name + ".PRIVATE.b64.txt"
-#         with open(fname, "w") as f:
-#             f.write("\n" + priv_str + "\n")
-#         print("Wrote PRIVATE file: ", fname)
-#
-
-# A combination of make_visible_fields and  write_files
-# make_pub_txt_str
-
-
-
-
-
-
-
 
 
 def split_text_pub_priv(text_in):
@@ -150,7 +104,7 @@ def split_text_pub_priv(text_in):
 # Policy: both members of split do not have to exist. (often pub no priv)
 # Policy: combined and split are mutually exclusive, should raise an error.
 
-def load_files2(name):
+def load_files(name):
     header_rex = r"^-+\[ (.*?) \]-+$"
     both_text_block = ""
     pub_text_block = ""
@@ -187,14 +141,6 @@ def load_files2(name):
     if not both_text_block:
         both_text_block = pub_text_block + "\n\n" + priv_text_block
     return both_text_block
-
-
-# Like load_files but if the public block part is a string. (e.g. cert stored in code)
-# Note: users can pass in their own schema, for check visible fields to run on their stuff.
-
-def pub_block_from_string(pub_text_block, schema=CERT_SCHEMA, field_map=None):
-    pub_block = text_to_binary_block(pub_text_block, schema, field_map)
-    return pub_block
 
 
 # ============================== visible Fields ===============================================

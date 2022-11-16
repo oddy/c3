@@ -55,9 +55,9 @@ def load_priv_block(block_bytes):
 
 # In: public_part bytes
 # Out: data-and-sig list cert chain structure
-# Note: the inverse of this function is part of make_sign
+# Note: the inverse of this function is part of sign
 
-def load_pub_block2(public_part):
+def load_pub_block(public_part):
     # The public part should have an initial header that indicates whether the first das is a payload or a cert
     ppkey, index = expect_key_header([PUB_CSR, PUB_PAYLOAD, PUB_CERTCHAIN], None, public_part, 0)
     public_part = public_part[index:]               # chop off the header
@@ -83,29 +83,6 @@ def load_pub_block2(public_part):
 
     return ppkey, chain
 
-
-#
-#
-# def load_pub_block(public_part):
-#     # The public part should have an initial header that indicates whether the first das is a payload or a cert
-#     ppkey, index = expect_key_header([PUB_PAYLOAD, PUB_CERTCHAIN], b3.LIST, public_part, 0)
-#     public_part = public_part[index:]               # chop off the header
-#
-#     # Should be a list of DAS structures, so pythonize the list
-#     chain = list_of_schema_unpack(DATASIG_SCHEMA, [HDR_DAS], public_part)
-#
-#     # unpack the certs & sigs in chain
-#     for i, das in enumerate(chain):
-#         # dont unpack cert if this is the first das and ppkey is PAYLOAD
-#         if i > 0 or ppkey == PUB_CERTCHAIN:
-#             das["cert"] = AttrDict(b3.schema_unpack(CERT_SCHEMA, das.data_part))
-#             schema_ensure_mandatory_fields(CERT_SCHEMA, das.cert)
-#
-#         das["sig"] = AttrDict(b3.schema_unpack(SIG_SCHEMA, das.sig_part))
-#         schema_ensure_mandatory_fields(SIG_SCHEMA, das.sig)
-#
-#     return chain
-#
 
 # --- Structure helper functions ---
 
@@ -152,16 +129,6 @@ def schema_ensure_mandatory_fields(schema, dx):
                 raise StructureError("Mandatory field '%s' is %r" % (field_name, dx[field_name]))
 
 
-def toplevel_header_key(buf):
-    if not buf:
-        raise StructureError("No data - buffer is empty or None")
-    try:
-        key, data_type, has_data, is_null, data_len, index = b3.decode_header(buf, 0)
-    except (IndexError, UnicodeDecodeError):
-        raise StructureError("Header structure is invalid")  # from None
-    return key
-
-
 # Index and Unicode are the only two unhandled exception types that b3's decode_header code produces when fuzzed.
 # IndexError trying to decode a bad varint for ext_type, datalen or number key.
 # Unicode for when b3 thinks there's a utf8 key but the utf8 is bad.
@@ -204,36 +171,6 @@ def combine_binary_pub_priv(pub_block, priv_block):
     dbx = dict(public=pub_block, private=priv_block)
     dual_bytes = b3.schema_pack(DUALBLOCK_SCHEMA, dbx)
     return b3.encode_item_joined(DUALBLOCK, b3.DICT, dual_bytes)
-
-
-# This does not ensure mandatory fields are present like load_pub_block() does, so it can be used for
-# more things e.g. visible_fields and check_expiry.
-# Also this keeps the vis_fields process seperate and distinct from the loading binary process.
-# Which we want.
-
-def extract_first_dict(part_block, schema):
-    if schema == PRIV_CRCWRAP_SCHEMA:  # private part block.   Note: this isn't actually used.
-        ppkey, index = expect_key_header([PRIV_CRCWRAPPED, ], b3.DICT, part_block, 0)
-        private_part = part_block[index:]
-        dx0 = AttrDict(b3.schema_unpack(schema, private_part))
-    else:           # public part block, using CERT_SCHEMA or a caller's SCHEMA
-        ppkey, index = expect_key_header([PUB_CSR, PUB_PAYLOAD, PUB_CERTCHAIN], None, part_block, 0)
-        public_part = part_block[index:]
-        if ppkey == PUB_CSR:            # CSRs are just a cert, everything else is a chain of DASes.
-            assert schema == CERT_SCHEMA
-            dx0 = AttrDict(b3.schema_unpack(schema, public_part))
-        else:
-            das0 = list_of_schema_unpack(DATASIG_SCHEMA, [HDR_DAS], public_part)[0]
-            dx0 = AttrDict(b3.schema_unpack(schema, das0.data_part))
-    return dx0
-
-def ensure_not_expired(using_pub):
-    dx0 = extract_first_dict(using_pub, CERT_SCHEMA)
-    expiry = dx0["expiry_date"]
-    if datetime.date.today() > expiry:
-        raise CertExpired("cert specified by --using has expired")
-    return True
-
 
 
 # --- Output/Results fetchers ---
@@ -280,6 +217,17 @@ def ctnm(das):
         return " (payload) "
 
 # --------------------------------------------------------------------------------------------------
+
+
+#
+# def toplevel_header_key(buf):
+#     if not buf:
+#         raise StructureError("No data - buffer is empty or None")
+#     try:
+#         key, data_type, has_data, is_null, data_len, index = b3.decode_header(buf, 0)
+#     except (IndexError, UnicodeDecodeError):
+#         raise StructureError("Header structure is invalid")  # from None
+#     return key
 
 
 # Making ULIDS

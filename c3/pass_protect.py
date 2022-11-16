@@ -13,6 +13,9 @@ from b3 import encode_uvarint, decode_uvarint
 # WE are payload agnostic - dont care about key_types etc - all that stuff is the Caller's problem
 # We're stealing most of this from qsafiles socrypt.
 
+# Note: if libsodium load fails on startup, hold that error and raise it in the user functions.
+#       so that libsodium not loading only becomes an error when users try and encrypt/decrypt later.
+
 
 # Binary format: [salt sz][xpayload sz][salt][num-passes][xpayload][xpayload][xpayload]...
 
@@ -22,14 +25,17 @@ class PassProtect(object):
     def __init__(s, libsodium_dir=''):
         s.log = logging.getLogger('passprot')
         s.sodium = None
-        s.LoadSodium(libsodium_dir)
-        s.crypto_secretbox_KEYBYTES     = s.sodium.crypto_secretbox_keybytes()
-        s.crypto_secretbox_NONCEBYTES   = s.sodium.crypto_secretbox_noncebytes()
-        s.crypto_secretbox_ZEROBYTES    = s.sodium.crypto_secretbox_zerobytes()
-        s.crypto_secretbox_BOXZEROBYTES = s.sodium.crypto_secretbox_boxzerobytes()
-        s.crypto_pwhash_SALTBYTES       = s.sodium.crypto_pwhash_saltbytes()
-        s.NONCE_LEN = s.crypto_secretbox_NONCEBYTES
-
+        try:
+            s.LoadSodium(libsodium_dir)
+            s.crypto_secretbox_KEYBYTES     = s.sodium.crypto_secretbox_keybytes()
+            s.crypto_secretbox_NONCEBYTES   = s.sodium.crypto_secretbox_noncebytes()
+            s.crypto_secretbox_ZEROBYTES    = s.sodium.crypto_secretbox_zerobytes()
+            s.crypto_secretbox_BOXZEROBYTES = s.sodium.crypto_secretbox_boxzerobytes()
+            s.crypto_pwhash_SALTBYTES       = s.sodium.crypto_pwhash_saltbytes()
+            s.NONCE_LEN = s.crypto_secretbox_NONCEBYTES
+        except Exception as e:
+            s.load_error_msg = str(e)
+            s.sodium = None
 
     # passes is a list of passwords. We might make it a dict with tags (quasi-usernames) later.
     # we dont actually enforce any policy on how many passes, but do all 2-combos if > 1
@@ -58,7 +64,10 @@ class PassProtect(object):
 
     # --- One password ---
     def SinglePassEncrypt(s, payload, passw):
-        if not isinstance(payload, bytes):  raise TypeError('invalid payload for pass encrypt')
+        if not s.sodium:        # sodium DLL load errors on startup are surfaced here.
+            raise RuntimeError(s.load_error_msg)
+        if not isinstance(payload, bytes):
+            raise TypeError('invalid payload for pass encrypt')
         salt = s.GetPwSalt()
         pass_key = s.PwToKey(passw, salt)
         xpayload = s.RawKeyEncrypt(pass_key, payload)
@@ -68,6 +77,8 @@ class PassProtect(object):
     def MultiPassEncrypt(s, payload, passes):
         if not isinstance(payload, bytes):  raise TypeError('invalid payload for pass encrypt')
         if not isinstance(passes, list):    raise TypeError('passes must be a list')
+        if not s.sodium:
+            raise RuntimeError(s.load_error_msg)
         salt = s.GetPwSalt()
         pass_keys = []
         for ia,ib in itertools.combinations(passes, 2):
@@ -85,12 +96,16 @@ class PassProtect(object):
         return num_passes > 1
 
     def SinglePassDecrypt(s, buf, passw):
+        if not s.sodium:
+            raise RuntimeError(s.load_error_msg)
         nump,salt,xpayloads = s.Unpack(buf)     # only ever 1 payload rly
         pass_key = s.PwToKey(passw, salt)
         payload  = s.RawKeyDecrypt(pass_key, xpayloads[0])
         return payload
 
     def DualPassDecrypt(s, buf, passes):
+        if not s.sodium:
+            raise RuntimeError(s.load_error_msg)
         nump,salt,xpayloads = s.Unpack(buf)
         concat_pass = ''.join(sorted(passes))
         pass_key = s.PwToKey(concat_pass, salt)
@@ -168,7 +183,7 @@ class PassProtect(object):
         ret = s.sodium.crypto_secretbox_open(out_buf, padded, ctypes.c_ulonglong(len(padded)), nonce, key)
 
         # if ret != 0:                                    raise ValueError('secret_box_open decrypt failed (%d)' % (ret))
-        if ret != 0:                                    raise DecryptFailed('secret_box_open decrypt failed (%d)' % (ret))
+        if ret != 0:                                    raise DecryptFailed('Decrypt failed (possibly incorrect password)')
         data = out_buf.raw[s.crypto_secretbox_ZEROBYTES:]
         return data
 
