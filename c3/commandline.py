@@ -12,49 +12,76 @@ from c3 import signverify
 from c3 import structure
 from c3 import textfiles
 
-
-# Policy: Be as janky with this stuff as we want right now, we're not doing a public release,
-#         just making the UX not suck too bad for us. This means click is out, --nopassword=yes is ok.
-# Policy: For simplicity for now, the subject names and cert_ids are the same. Later there should be ULIDs.
-
-# - Turn into Package.
-# * Clean up password prompts and commandline UX
-# * improve expiry date parsing
-# * Do build to pypi, 0.9.0
-
 # Use cases:
 # * Make license (sign),  verify license
 # * Make acmd key, make (sign) acmd message, verify acmd message
 # * make build key [nocode], sign build manifest [nocode], verify build manifest  [signverify]
 
 
-# need to do __init__.py  and have an external test code.
-# For signing things, and verifying things.
+# python commandline.py  verify --name=payload.txt --trusted=root1
+# python commandline.py  sign --payload=payload.txt --link=append  --using=inter1
 
 
-# [DO THIS DURING LICENSING]  - so e.g. licensing gets its own visible fields.
+# --debug or --verbose  turns on stack traces.
+
+# make --name=blah --expiry=blah  --parts=split
 
 
-#               |     no payload             payload
-#  -------------+-------------------------------------------------
-#  using cert   |     make chain signer      sign payload
-#               |
-#  using self   |     make self signer       ERROR invalid state
+# python -m c3 make --name=hello --expiry="24 oct 2024"  --parts=combine  --debug=y  --nopassword=y
 
 
-def CommandlineMain(zargs=None):
-    print("Checking Function args received (for entry point testing): ",repr(zargs))
-    if zargs is None:
-        zargs = sys.argv[1:]
-    if len(zargs) < 1:
+def CommandlineMain():
+    CheckUsageBail()
+    cmd = sys.argv[1].lower()
+    args = ArgvArgs()
+    c3m = signverify.SignVerify()
+
+    # make CSR  outputfilename
+    # sign   file (csr, chain[renewal],payload)  using file
+    # signcert  signpayload
+    # verify  file  trusted file
+
+    try:
+        if cmd == "make":
+            # --- pub cert (signing request) ---
+            csr = c3m.make_csr(name=args.name, expiry_text=args.expiry)
+            # --- private key (encrypt) ---
+            if "nopassword" in args:
+                csr.private_key_set_nopassword()
+            else:
+                csr.private_key_encrypt_user()
+            # --- Write split or combined text files ---
+            if args.parts == "split":
+                csr.pub.write_text_file(args.name)
+                csr.priv.write_text_file(args.name)
+            elif args.parts == "combine":
+                csr.both.write_text_file(args.name)
+            else:
+                print("\nERROR:  Please specify --parts=split or --parts=combine")
+            return
+
+
+
+
+    except Exception as e:
+        if "debug" in args:
+            raise
+        else:
+            Usage()
+            print("\nERROR:  "+str(e))
+            return
+
+
+
+def CommandlineMainOld():
+    if len(sys.argv) < 2:
         UsageBail()
-    cmd = zargs[0].lower()
-    args = ArgvArgs(zargs)
+        return
+    cmd = sys.argv[1].lower()
+    args = ArgvArgs()
 
     c3m = signverify.SignVerify()
 
-    # python commandline.py  make --name=root1 --using=self  --parts=split --expiry=2022-02-02
-    # python commandline.py  make --name=inter1 --using=root1 --link=name --parts=combine --expiry=2022-02-02
 
     if cmd == "make":
         if "using" not in args:
@@ -94,7 +121,7 @@ def CommandlineMain(zargs=None):
         textfiles.write_files(args.name, pub_block, epriv_block, combine, pub_ff_lines=pub_ffields)
         return
 
-    # python commandline.py  sign --payload=payload.txt --link=append  --using=inter1
+
 
     if cmd == "sign":
         if "payload" not in args:
@@ -115,7 +142,7 @@ def CommandlineMain(zargs=None):
         # Note: ^^ no private part, so no combine.         ^^^ how to visible-fields for app
         return
 
-    # python commandline.py  verify --name=payload.txt --trusted=root1
+
 
     if cmd == "verify":
         if "trusted" in args:
@@ -179,29 +206,31 @@ def ParseBasicDate(txt):
 
     return datetime.date(day=day, month=mon, year=year)
 
+def CheckUsageBail():
+    if len(sys.argv) < 2:
+        Usage()
+        sys.exit(1)
 
-def UsageBail(msg=""):
-    help_txt = """
-    %s
-    Usage:
-    # python commandline.py  make --name=root1 --using=self  --parts=split --expiry=2022-oct-20
-    # python commandline.py  make --name=inter1 --using=root1 --link=name --parts=combine   
-
-    """ % (msg+"\n",)
+def Usage(msg=""):
+    help_txt = """%s
+Usage:
+  (usage goes here)
+    """ % (msg,)
     print(help_txt)
-    sys.exit(1)
 
 
-def ArgvArgs(zargs):
-    args = structure.AttrDict()
-    for arg in zargs:
-        z = re.match(r"^--(\w+)=(.+)$", arg)
-        if z:
-            k, v = z.groups()
-            args[k] = v
-    return args
 
-if __name__ == "__main__":
-    CommandlineMain()
+class ArgvArgs(dict):
+    def __init__(self):
+        super(ArgvArgs, self).__init__()
+        for arg in sys.argv:
+            z = re.match(r"^--(\w+)=(.+)$", arg)
+            if z:
+                k, v = z.groups()
+                self[k] = v
+    def __getattr__(self, name):
+        if name not in self:
+            raise Exception("Please specify missing commandline argument   --%s="%name)
+        return self[name]
 
 

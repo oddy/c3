@@ -13,6 +13,8 @@ from c3.structure import AttrDict
 # These are attached to the CEs as properties .pub. .priv. .both.  so e.g. ce.both.as_text()
 # so we can go e.g. ce.pub.as_text(),  ce.both.as_binary(),
 
+# Note: textfiles.load_files is the inverse of the write_text_file functions here.
+
 class CeOutPub(object):
     def __init__(self, ce_parent):
         self.ce = ce_parent
@@ -25,7 +27,7 @@ class CeOutPub(object):
 
     def write_text_file(self, filename, vis_map=None, desc=""):
         txt = self.as_text(vis_map, desc)
-        with open(filename, "wt") as f:
+        with open(filename+".public.b64.txt", "wt") as f:
             f.write(txt)
         return
 
@@ -42,11 +44,11 @@ class CeOutPriv(object):
     def as_text(self, vis_map=None, desc=""):
         if not self.ce.epriv_block:
             raise OutputError("Please encrypt() or nopassword() the private key")
-        return textfiles.make_priv_txt_str_ce(self.ce, desc, vis_map)
+        return textfiles.make_priv_txt_str_ce(self.ce, desc)  # note vis_map not used
 
     def write_text_file(self, filename, vis_map=None, desc=""):
         txt = self.as_text(vis_map, desc)
-        with open(filename, "wt") as f:
+        with open(filename+".PRIVATE.b64.txt", "wt") as f:
             f.write(txt)
 
 
@@ -68,7 +70,7 @@ class CeOutBoth(object):
 
     def write_text_file(self, filename, vis_map=None, desc=""):
         txt = self.as_text(vis_map, desc)
-        with open(filename, "wt") as f:
+        with open(filename+".b64.txt", "wt") as f:
             f.write(txt)
 
 

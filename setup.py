@@ -39,4 +39,11 @@ setup(
     data_files=[ ("", ["LICENSE.txt",],) ],
     # we want a universal wheel
     options={"bdist_wheel": {"universal": True}},
+
+    entry_points={
+        "console_scripts" : [
+            "c3 = c3.__main__:main"
+        ]
+    }
+
 )

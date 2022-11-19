@@ -61,9 +61,6 @@ def make_priv_txt_str(priv_block, name="", desc=""):
     priv_desc = (desc or name) + " - PRIVATE Key"
     priv_str = asc_header(priv_desc) + "\n" + b64_encode(priv_block).decode()
     return priv_str
-    # if priv_ff_lines:
-    #     priv_ff_lines += "\n"
-    # priv_str = asc_header(priv_desc) + "\n" + priv_ff_lines + b64_encode(private_part).decode()
 
 
 def split_text_pub_priv(text_in):
