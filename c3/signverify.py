@@ -71,16 +71,16 @@ class SignVerify(object):
     # Policy: not supporting Visible Fields for the private block atm.
     #         The private block doesn't have a subject name anyway, we're relying on keypair crosscheck
 
-    def load(self, text_filename="", text="", block=b"", vis_map=None):
-        highlander_check(text_filename, text, block)  # there can be only one of these 3
+    def load(self, filename="", text="", block=b"", vis_map=None):
+        highlander_check(filename, text, block)  # there can be only one of these 3
         ce = certentry.CertEntry(self)
         pub_vf_lines = ""
         payload_dict = {}
 
         # Note: this if-flow works because text_file, text, and block are mutually exclusive
         # --- LOAD from aguments ---
-        if text_filename:
-            text = textfiles.load_files(text_filename)
+        if filename:
+            text = textfiles.load_files(filename)
 
         if text:  # Text is EITHER, public text, private text, or both texts concatenated.
             ce.pub_text, ce.epriv_text = textfiles.split_text_pub_priv(text)
@@ -216,11 +216,11 @@ class SignVerify(object):
         sig_bytes = keypairs.sign_make_sig(key_type, signer.priv_key_bytes, payload)
 
         # build our chain with 'payload'&sig + signers chain
-        signer_cert_id = signer.cert.cert_id if link_by_name or self_signing else b""
+        signer_cert_id = signer.cert.cert_id if (link_by_name or self_signing) else b""
         datasig = self.make_datasig(payload, sig_bytes, signer_cert_id)
 
         ce.chain = [datasig]
-        if not link_by_name:
+        if not (link_by_name or self_signing):
             ce.chain += signer.chain
 
         if ce.pub_type == PUB_CSR:

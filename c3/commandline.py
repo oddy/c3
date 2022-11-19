@@ -29,6 +29,15 @@ from c3 import textfiles
 
 # python -m c3 make --name=hello --expiry="24 oct 2024"  --parts=combine  --debug=y  --nopassword=y
 
+def write_out_file(ce, parts, name):
+    # --- Write split or combined text files ---
+    if parts == "split":
+        ce.pub.write_text_file(name)
+        ce.priv.write_text_file(name)
+    elif parts == "combine":
+        ce.both.write_text_file(name)
+    else:
+        print("\nERROR:  Please specify --parts=split or --parts=combine")
 
 def CommandlineMain():
     CheckUsageBail()
@@ -36,13 +45,12 @@ def CommandlineMain():
     args = ArgvArgs()
     c3m = signverify.SignVerify()
 
-    # make CSR  outputfilename
-    # sign   file (csr, chain[renewal],payload)  using file
-    # signcert  signpayload
-    # verify  file  trusted file
+    # Todo: it would be nice if the text description included whether things were CSRs etc.
 
     try:
+        # --- CSR / certchain pipeline ---
         if cmd == "make":
+            parts = args.parts
             # --- pub cert (signing request) ---
             csr = c3m.make_csr(name=args.name, expiry_text=args.expiry)
             # --- private key (encrypt) ---
@@ -50,122 +58,59 @@ def CommandlineMain():
                 csr.private_key_set_nopassword()
             else:
                 csr.private_key_encrypt_user()
-            # --- Write split or combined text files ---
-            if args.parts == "split":
-                csr.pub.write_text_file(args.name)
-                csr.priv.write_text_file(args.name)
-            elif args.parts == "combine":
-                csr.both.write_text_file(args.name)
-            else:
-                print("\nERROR:  Please specify --parts=split or --parts=combine")
+            # --- save file(s) ---
+            write_out_file(csr, parts, args.name)
             return
 
+        if cmd == "signcert":
+            parts = args.parts
+            to_sign = c3m.load(filename=args.name)
+            if args.using == "self":
+                signer = to_sign
+            else:
+                signer = c3m.load(filename=args.using)
+            link_by_name = "link" in args and args.link == "name"
+            signer.private_key_decrypt_user()
+            c3m.sign(to_sign, signer, link_by_name)
+            write_out_file(to_sign, parts, args.name)
+            return
 
+        # --- Payload pipeline ---
+        if cmd == "signpayload":
+            signer = c3m.load(filename=args.using)
+            payload = c3m.make_payload(open(args.payload, "rb").read())
+            signer.private_key_decrypt_user()
+            c3m.sign(payload, signer)
+            payload.pub.write_text_file(args.payload)
+            return
 
+        # --- Load & verify ---
+        if cmd == "verify":
+            c3m.load_trusted_cert(filename=args.trusted)
+            ce = c3m.load(filename=args.name)
+            if c3m.verify(ce):
+                print("\nVerify OK")
+            return
+
+        if cmd == "load":
+            x = c3m.load(filename=args.name)
+            print("pub_type ", x.pub_type)
+            print("chain    ")
+            pprint(x.chain)
+            print("payload  ")
+            print(x.payload)
+            return
+
+        Usage()
+        print("Unknown Command")
 
     except Exception as e:
         if "debug" in args:
             raise
         else:
             Usage()
-            print("\nERROR:  "+str(e))
+            print("ERROR:  "+str(e))
             return
-
-
-
-def CommandlineMainOld():
-    if len(sys.argv) < 2:
-        UsageBail()
-        return
-    cmd = sys.argv[1].lower()
-    args = ArgvArgs()
-
-    c3m = signverify.SignVerify()
-
-
-    if cmd == "make":
-        if "using" not in args:
-            print("'make' needs --using=<name> or --using=self, please supply")
-            return
-
-        expiry = ParseBasicDate(args.expiry)
-        if args.using == "self":
-            pub_block, priv = c3m.make_sign(action=MAKE_SELFSIGNED, name=args.name, expiry=expiry)
-        else:
-            if "link" not in args:
-                print("'make' needs --link=append or --link=name, please supply")
-                return
-
-            upub, uepriv = textfiles.load_files(args.using)         # uses files
-            upriv = c3m.decrypt_private_key(structure.load_priv_block(uepriv))  # (might) ask user for password
-            link = {"append" : LINK_APPEND, "name" : LINK_NAME}[args.link]
-
-            pub_block, priv = c3m.make_sign(action=MAKE_INTERMEDIATE, name=args.name, expiry=expiry,
-                                 using_priv=upriv, using_pub=upub, using_name=args.using, link=link)
-
-        bare = "nopassword" in args  # Note: has to be --nopassword=blah for now.
-        if not bare:
-            print("Setting password on private key-")
-            epriv = c3m.encrypt_private_key(priv)
-        else:
-            epriv = priv
-        epriv_block = structure.make_priv_block(epriv, bare)
-
-        combine = True
-        if "parts" in args and args.parts == "split":
-            combine = False
-
-        pub_ff_names = ["subject_name", "expiry_date", "issued_date"]
-        pub_ffields = textfiles.make_visible_fields(pub_block, CERT_SCHEMA, pub_ff_names)
-
-        textfiles.write_files(args.name, pub_block, epriv_block, combine, pub_ff_lines=pub_ffields)
-        return
-
-
-
-    if cmd == "sign":
-        if "payload" not in args:
-            print("please supply --payload=<filename>")
-            return
-        payload_bytes = open(args.payload, "rb").read()
-
-        upub, uepriv = textfiles.load_files(args.using)  # uses files
-        upriv = c3m.decrypt_private_key(structure.load_priv_block(uepriv))  # (might) ask user for password
-        link = {"append": LINK_APPEND, "name": LINK_NAME}[args.link]
-
-        pub, priv = c3m.make_sign(action=SIGN_PAYLOAD, name=args.name, payload=payload_bytes,
-                                  using_priv=upriv, using_pub=upub, link=link)
-
-        # pub_ff_names = ["whatever", "app_specific", "fields_app_schema_has"]
-        # pub_ffields = c3m.make_visible_fields(pub, APP_SCHEMA, pub_ff_names)
-        textfiles.write_files(args.payload, pub, b"", combine=False)   #, pub_ff_lines=pub_ffields))
-        # Note: ^^ no private part, so no combine.         ^^^ how to visible-fields for app
-        return
-
-
-
-    if cmd == "verify":
-        if "trusted" in args:
-            print("Loading trusted cert ", args.trusted)
-            tr_pub, _ = textfiles.load_files(args.trusted)
-            c3m.add_trusted_certs(tr_pub)
-        else:
-            print("Please specify a trusted cert with --trusted=")
-            return
-
-        public_part, _ = textfiles.load_files(args.name)
-        chain = structure.load_pub_block(public_part)
-        ret = c3m.verify(chain)
-        print("\n\nverify returns", repr(ret))
-        if not ret:
-            return
-        print("Chain:")
-        pprint(structure.get_meta(chain))
-        print("Payload:")
-        print(structure.get_payload(chain))
-        return
-    UsageBail("Unknown command")
-
 
 # Constraints:  Year must be 4 digits
 #               American month-first date format is NOT allowed
@@ -214,7 +159,12 @@ def CheckUsageBail():
 def Usage(msg=""):
     help_txt = """%s
 Usage:
-  (usage goes here)
+    c3 make        --name=root1  --expiry="24 oct 2024" --parts=split
+    c3 signcert    --name=root1  --using=self           --parts=split
+    c3 make        --name=inter1 --expiry="24 oct 2024" --parts=combine
+    c3 signcert    --name=inter1 --using=root1          --parts=combine
+    c3 signpayload --payload=payload.txt --using=inter1
+    c3 verify      --name=payload.txt --trusted=root1
     """ % (msg,)
     print(help_txt)
 
