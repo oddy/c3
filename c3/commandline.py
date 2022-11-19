@@ -7,37 +7,12 @@ from __future__ import print_function
 import sys, re, datetime
 from pprint import pprint
 
-from c3.constants import *
 from c3 import signverify
-from c3 import structure
-from c3 import textfiles
 
 # Use cases:
 # * Make license (sign),  verify license
 # * Make acmd key, make (sign) acmd message, verify acmd message
 # * make build key [nocode], sign build manifest [nocode], verify build manifest  [signverify]
-
-
-# python commandline.py  verify --name=payload.txt --trusted=root1
-# python commandline.py  sign --payload=payload.txt --link=append  --using=inter1
-
-
-# --debug or --verbose  turns on stack traces.
-
-# make --name=blah --expiry=blah  --parts=split
-
-
-# python -m c3 make --name=hello --expiry="24 oct 2024"  --parts=combine  --debug=y  --nopassword=y
-
-def write_out_file(ce, parts, name):
-    # --- Write split or combined text files ---
-    if parts == "split":
-        ce.pub.write_text_file(name)
-        ce.priv.write_text_file(name)
-    elif parts == "combine":
-        ce.both.write_text_file(name)
-    else:
-        print("\nERROR:  Please specify --parts=split or --parts=combine")
 
 def CommandlineMain():
     CheckUsageBail()
@@ -112,6 +87,18 @@ def CommandlineMain():
             print("ERROR:  "+str(e))
             return
 
+
+def write_out_file(ce, parts, name):
+    # --- Write split or combined text files ---
+    if parts == "split":
+        ce.pub.write_text_file(name)
+        ce.priv.write_text_file(name)
+    elif parts == "combine":
+        ce.both.write_text_file(name)
+    else:
+        print("\nERROR:  Please specify --parts=split or --parts=combine")
+
+
 # Constraints:  Year must be 4 digits
 #               American month-first date format is NOT allowed
 # Examples:     23/2/2022  02_02_2016  '15 October 2021' 2024-05-26  2012/jan/13  etc.
@@ -167,8 +154,6 @@ Usage:
     c3 verify      --name=payload.txt --trusted=root1
     """ % (msg,)
     print(help_txt)
-
-
 
 class ArgvArgs(dict):
     def __init__(self):
