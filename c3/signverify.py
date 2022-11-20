@@ -11,14 +11,8 @@ from c3 import getpassword, pass_protect
 from c3 import commandline
 from c3.structure import AttrDict
 
-# TODO TODO TODO
-# Ok, SignVerify spawns the CEs. So the user can treat CEs as just an opaque handle if they want.
-# So load, make_csr and make_payload all belong to signverify and create CEs.
-# So no fancy CE constructor.
-
-# Apart from that, put as much as possible into the CE and out of Signverify.
-# then port commandline.
 # then the tests.
+# and the ULID mod.
 # Then we're done.
 # TODO TODO TODO
 
@@ -274,9 +268,9 @@ class SignVerify(object):
     def verify(self, ce):
         chain = ce.chain
         if not chain:
-            raise ValueError("Cannot verify - no cert chain present")
+            raise StructureError("Cannot verify - no cert chain present")
         if "sig" not in chain[0]:
-            raise ValueError("Cannot verify - CE must be load()ed first")
+            raise StructureError("Cannot verify - CE must be load()ed first")
 
         certs_by_id = {das.cert.cert_id : das.cert for das in chain if "cert" in das}
         found_in_trusted = False         # whether we have established a link to the trusted_ces
@@ -303,8 +297,7 @@ class SignVerify(object):
             try:
                 keypairs.verify(next_cert, das.data_part, das.sig.signature)
             except Exception:       # wrap theirs with our own error class
-                raise       # todo: turn the wrap back on
-                # raise InvalidSignatureError(structure.ctnm(das)+"Signature failed to verify")
+                raise InvalidSignatureError(structure.ctnm(das)+"Signature failed to verify")
 
             # --- Now do next das in line ---
 
@@ -324,7 +317,7 @@ def highlander_check(*args):
     ibool_args = [int(bool(i)) for i in args]
     num_true = functools.reduce(operator.add, ibool_args, 0)
     if num_true == 0:
-        raise ValueError("Please specify one mandatory argument (none were specified)")
+        raise ValueError("Please specify one mandatory argument (none or empty specified)")
     if num_true > 1:
         raise ValueError("Please specify only one mandatory argument (multiple were specified)")
     return True

@@ -4,7 +4,7 @@
 
 from __future__ import print_function
 
-import sys, re, datetime
+import sys, re, datetime, shlex
 from pprint import pprint
 
 from c3 import signverify
@@ -14,10 +14,10 @@ from c3 import signverify
 # * Make acmd key, make (sign) acmd message, verify acmd message
 # * make build key [nocode], sign build manifest [nocode], verify build manifest  [signverify]
 
-def CommandlineMain():
+def CommandlineMain(cmdline_str=""):
     CheckUsageBail()
-    cmd = sys.argv[1].lower()
-    args = ArgvArgs()
+    args = ArgvArgs(cmdline_str)    # cmdline_str is for testing, usually this pulls from sys.argv
+    cmd = args.cmd
     c3m = signverify.SignVerify()
 
     # Todo: it would be nice if the text description included whether things were CSRs etc.
@@ -77,7 +77,7 @@ def CommandlineMain():
             return
 
         Usage()
-        print("Unknown Command")
+        print("Unknown Command %r" % cmd)
 
     except Exception as e:
         if "debug" in args:
@@ -156,9 +156,14 @@ Usage:
     print(help_txt)
 
 class ArgvArgs(dict):
-    def __init__(self):
+    def __init__(self, cmdline_str=""):
         super(ArgvArgs, self).__init__()
-        for arg in sys.argv:
+        if cmdline_str:                         # for testing
+            argv = shlex.split(cmdline_str)
+        else:
+            argv = sys.argv
+        self.cmd = argv[1].strip().lower()
+        for arg in argv:
             z = re.match(r"^--(\w+)=(.+)$", arg)
             if z:
                 k, v = z.groups()

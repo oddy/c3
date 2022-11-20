@@ -7,7 +7,7 @@ import b3
 
 from c3 import structure
 from c3.constants import CERT_SCHEMA, PRIV_CRCWRAP_SCHEMA, PUB_PAYLOAD, PUB_CSR, PUB_CERTCHAIN
-from c3.errors import StructureError, TamperError
+from c3.errors import StructureError, TamperError, TextStructureError
 
 try:
     b64_encode = base64.encodebytes
@@ -72,7 +72,7 @@ def split_text_pub_priv(text_in):
     priv_text_block = ""
 
     if num_hdrs not in (1,2):
-        raise ValueError("Text needs to have 1 or 2 ---[Headers]--- present")
+        raise TextStructureError("Text needs to have 1 or 2 ---[Headers]--- present")
 
     if num_hdrs == 2:
         # structure_check wants to see the headers too if they are there.
@@ -109,17 +109,15 @@ def load_files(name):
 
     combine_name = name + ".b64.txt"
     if os.path.isfile(combine_name):
-        print("Loading combined file ", combine_name)
         both_text_block = open(combine_name, "r").read()
         hdrs = list(re.finditer(header_rex, both_text_block, re.MULTILINE))
         if len(hdrs) != 2:
-            raise ValueError("Number of headers in combined file is not 2")
+            raise TextStructureError("Number of headers in combined file is not 2")
 
     pub_only_name = name + ".public.b64.txt"
     if os.path.isfile(pub_only_name):
         if both_text_block:
             raise ValueError("Both combined and public-only files exist, please remove one")
-        print("Loading public file ", pub_only_name)
         pub_text_block = open(pub_only_name, "r").read()
         hdrs = list(re.finditer(header_rex, pub_text_block, re.MULTILINE))
         if len(hdrs) != 1:
@@ -129,7 +127,6 @@ def load_files(name):
     if os.path.isfile(priv_only_name):
         if both_text_block:
             raise ValueError("Both combined and public-only files exist, please remove one")
-        print("Loading private file ", priv_only_name)
         priv_text_block = open(priv_only_name, "r").read()
         hdrs = list(re.finditer(header_rex, priv_text_block, re.MULTILINE))
         if len(hdrs) != 1:
@@ -185,7 +182,7 @@ def make_visible_fields(dx0, vis_map):
         if name in dx0 and name in key_names:
             types_by_name[name] = typ
     if not types_by_name:
-        raise ValueError("No wanted visible fields found in the secure block")
+        raise TextStructureError("No wanted visible fields found in the secure block")
         # note: should this just be a warning & continue?
 
     # --- Convert wanted fields to a textual representation where possible ---
@@ -240,7 +237,7 @@ def text_to_binary_block(text_part):
     c0s = ''.join([line[0] if line else ' ' for line in lines]) + ' '
     X = re.match(r"^\s*(-?)(\[*)([a-zA-Z0-9/=+]+)[ \-]", c0s)
     if not X:
-        raise StructureError("File text vertical structure is invalid")
+        raise TextStructureError("File text vertical structure is invalid")
     vf_lines = lines[X.start(2): X.end(2)]  # extract FF lines
     b64_lines = lines[X.start(3): X.end(3)]  # extract base64 lines
     b64_block = ''.join(b64_lines)

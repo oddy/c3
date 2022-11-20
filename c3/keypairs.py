@@ -24,7 +24,6 @@ def sign_make_sig(keytype, priv_bytes, payload_bytes):
 
 def verify(cert, payload_bytes, signature_bytes):
     if cert.key_type not in (KT_ECDSA_PRIME256V1,):
-        print("OH NO " +"* " *120)
         raise NotImplementedError("Error verifying payload - unknown keytype")
     VK = ecdsa.VerifyingKey.from_string(cert.public_key, ecdsa.NIST256p)
     return VK.verify(signature_bytes, payload_bytes)  # returns True or raises exception

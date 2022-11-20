@@ -7,6 +7,8 @@ class StructureError(C3Error):  # something wrong with the data/binary structure
     pass
 class IntegrityError(StructureError):  # the crc32 in the privkey block doesn't match block contents
     pass
+class TextStructureError(StructureError):        # something wrong with text structure
+    pass
 class VerifyError(C3Error):     # parent error for failures in the verification process
     pass
 class InvalidSignatureError(VerifyError):   # cryptographic signature failed verification
