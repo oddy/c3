@@ -15,7 +15,6 @@ from c3 import signverify
 # * make build key [nocode], sign build manifest [nocode], verify build manifest  [signverify]
 
 def CommandlineMain(cmdline_str=""):
-    CheckUsageBail()
     args = ArgvArgs(cmdline_str)    # cmdline_str is for testing, usually this pulls from sys.argv
     cmd = args.cmd
     c3m = signverify.SignVerify()
@@ -138,10 +137,6 @@ def ParseBasicDate(txt):
 
     return datetime.date(day=day, month=mon, year=year)
 
-def CheckUsageBail():
-    if len(sys.argv) < 2:
-        Usage()
-        sys.exit(1)
 
 def Usage(msg=""):
     help_txt = """%s
@@ -162,6 +157,9 @@ class ArgvArgs(dict):
             argv = shlex.split(cmdline_str)
         else:
             argv = sys.argv
+        if len(argv) < 2:
+            Usage()
+            sys.exit(1)
         self.cmd = argv[1].strip().lower()
         for arg in argv:
             z = re.match(r"^--(\w+)=(.+)$", arg)

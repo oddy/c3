@@ -144,8 +144,7 @@ def expect_key_header(want_keys, want_type, buf, index):
     if key not in want_keys:
         raise StructureError \
             ("Incorrect key in header - wanted %r got %s" % (want_keys, repr(key)[:32]))
-    if want_type is not None and  want_type != data_type:
-        # type checking can be disabled for peeking ops.
+    if want_type is not None and want_type != data_type:   # note often we dont want type checking
         raise StructureError \
             ("Incorrect type in header - wanted %r got %s" % (want_type, repr(data_type)[:32]))
     if not has_data:

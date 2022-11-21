@@ -274,6 +274,51 @@ def test_verify_untrusted_chain_error(c3m, ce1_pub_buf):
     with pytest.raises(UntrustedChainError):
         c3m.verify(ce2)
 
+# ---- Quick fuzz to exercise all the load errors ----
+# just throw all the error strings together then assert the presence of the errors we want
+
+selfsigned_pub_and_priv_b64 = """
+6Qv7AQkAvgHZDroB6Rm2AQkAZQkABXJvb3QxGQEFcm9vdDE5AgEBCQNAOJmZ6Z8hd/7lakFoAlg
+6WCqK18Li3ELmQF0YSBoDQD6NuW92fkt3F07SF40MM0GH2dgNlQlTCj6c6nJ38fTmRakEBBgK0B
++pBQQVC8wfCQFLCQBARutV0rMfpil5CIqj1sqYdZRXTIi7ofi2w5+sYmEScBG62jANqas+VwF1P
+2TGrNSRq4VToN37HIQWhhosQ5OsngkBBXJvb3QxCQE26Q8zOQABATkBAQEJAiDVJDmswBXrxa4P
+IuqHpl1H38C5Q1QdssQSxPhUh1ZAIzkDBb3RuKgB
+"""
+# note: verified there are no \xaa bytes in the above block.
+
+# Note: There are some header data_lens which are not actually used by us. So when those get
+#       glitched, the verify still succeeds, which is legit and ok.
+#       Cross reference printing Success! in here with printing data_len in expect_key_header()
+#       in structure.py to prove this out.
+
+def test_load_fuzz(c3m):
+    buf = base64.b64decode(selfsigned_pub_and_priv_b64)
+    c3m.load_trusted_cert(block=buf)
+    fails = set()
+    for i in range(len(buf)):
+        buf2 = buf[:i] + b"\xaa" + buf[i+1:]
+        try:
+            ce = c3m.load(block=buf2)
+            c3m.verify(ce)
+            # print("Success! i=", i)
+        except Exception as e:
+            fails.add(str(e))
+
+    errs = "\n".join(fails)
+    #print(errs)
+    assert "List item header structure is invalid" in errs
+    assert "List item header key invalid" in errs
+    # assert "invalid - no data" in errs
+    # assert "data is missing" in errs
+    assert "Mandatory field" in errs
+    # assert "Required schema field" in errs
+    assert "Private key block failed data integrity check" in errs
+    assert "Signature failed to verify" in errs
+    assert "not found" in errs
+    assert "Next issuer cert is missing" in errs
+    assert "Incorrect key in header" in errs
+
+
 
 # ---- Test keypair matching ----
 
@@ -408,7 +453,7 @@ c3 signpayload --payload=payload.txt --using=inter1
 c3 verify      --name=payload.txt --trusted=root1
 """
 
-def t_est_commandline_full():
+def test_commandline_full():
     os.environ["C3_PASSWORD"] = "Password01!"
     with open("payload.txt", "wt") as f:
         f.write(PAYLOAD)
@@ -417,6 +462,11 @@ def t_est_commandline_full():
             continue
         commandline.CommandlineMain(line)
     # not really a proper test, should assert something.
+
+
+
+
+
 
 
 # ---------- ID collision ---------------
