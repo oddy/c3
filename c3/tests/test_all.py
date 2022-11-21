@@ -305,7 +305,7 @@ def test_load_fuzz(c3m):
             fails.add(str(e))
 
     errs = "\n".join(fails)
-    #print(errs)
+    # print(errs)
     assert "List item header structure is invalid" in errs
     assert "List item header key invalid" in errs
     # assert "invalid - no data" in errs
@@ -453,6 +453,7 @@ c3 signpayload --payload=payload.txt --using=inter1
 c3 verify      --name=payload.txt --trusted=root1
 """
 
+@pytest.mark.skip(reason="writes files - enable in code for more coverage")
 def test_commandline_full():
     os.environ["C3_PASSWORD"] = "Password01!"
     with open("payload.txt", "wt") as f:
@@ -462,9 +463,6 @@ def test_commandline_full():
             continue
         commandline.CommandlineMain(line)
     # not really a proper test, should assert something.
-
-
-
 
 
 
