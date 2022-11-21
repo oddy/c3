@@ -154,10 +154,10 @@ class SignVerify(object):
 
         cert_id = name.encode("ascii")
         today = datetime.date.today()
-        key_priv, key_pub = keypairs.generate(keytype=KT_ECDSA_PRIME256V1)
+        key_priv, key_pub = keypairs.generate(keytype=KT_ECDSA_SECP256K1)
 
         ce.cert = AttrDict(public_key=key_pub, subject_name=name, cert_id=cert_id, issued_date=today,
-                           key_type=KT_ECDSA_PRIME256V1, expiry_date=expiry)
+                           key_type=KT_ECDSA_SECP256K1, expiry_date=expiry)
 
         ce.priv_key_bytes = key_priv
         # Note: we don't set ce.epriv_block here, user must call encrypt() or nopassword() to make

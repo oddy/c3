@@ -32,7 +32,8 @@ HDR_DAS = 0x19            # "data_part and sig_part structure"
 # Private-part field types
 PRIVTYPE_BARE = 1
 PRIVTYPE_PASS_PROTECT = 2
-KT_ECDSA_PRIME256V1 = 1      # this may include hashers (tho may include hashtype later?)
+KT_ECDSA_PRIME256V1 = 1
+KT_ECDSA_SECP256K1 = 2      # the bitcoin one, for which fast implementations exist
 KNOWN_PRIVTYPES = [1, 2]
 KNOWN_KEYTYPES = [1]
 

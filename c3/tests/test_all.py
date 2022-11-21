@@ -285,6 +285,8 @@ selfsigned_pub_and_priv_b64 = """
 IuqHpl1H38C5Q1QdssQSxPhUh1ZAIzkDBb3RuKgB
 """
 # note: verified there are no \xaa bytes in the above block.
+# Note: The above block was created using PRIME256V1 keys not SECP256k1, so it serves as a test for
+#       keypairs.py's multi-keytype support also.
 
 # Note: There are some header data_lens which are not actually used by us. So when those get
 #       glitched, the verify still succeeds, which is legit and ok.
