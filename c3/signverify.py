@@ -7,24 +7,9 @@ from c3.constants import *
 from c3.errors import *
 from c3 import certentry, keypairs
 from c3 import structure, textfiles
-from c3 import getpassword, pass_protect
+from c3 import pass_protect
 from c3 import commandline
 from c3.structure import AttrDict
-
-# then the tests.
-# and the ULID mod.
-# Then we're done.
-# TODO TODO TODO
-
-
-# Consider the "Store everything in a smart object" approach so that we can get the **APIs usable**
-# Because the library user not losing their mind trying to use us, is more important than some
-# memory usage double-ups, and just adding fields to a smart-object stops us *bogging down on that front*
-# user-facing API usability is a lot more important than memory performance, especially for smallscale stuff like this.
-# Licensing's "Entry and Registry-of-Entries" model seems to work quite well
-# IF we're optimising for "give the user an opaque handle" operations, which we SHOULD ALWAYS be.
-
-# ALWAYS copy-paste THEN DRY. Do NOT try to DRY in-flight!
 
 # Policy: anything with "block" in the name is bytes.
 #         File, Txt, Block
@@ -33,8 +18,6 @@ from c3.structure import AttrDict
 #         rather than "seperate payload & sig top level structure" because it makes verify simpler
 #         & its too much change at this point.
 #         (Also makes verify a lot simpler to implement in *other* languages quickly)
-
-
 
 # Policy: verify() only reads from self.trusted_ces, it doesnt write anything into there.
 #         Caller/User must call add_trusted_certs() to add theirs.
@@ -50,8 +33,6 @@ class SignVerify(object):
 
 
     # ============ Load  ==================================================================
-
-    # Todo: consider reload+caching with password parameter, so passwords can be desynced.
 
     # Note: vis_map is ONLY for text-stuff, the binary stuff doesn't actually care _ever_ about the
     #       user's schema. The USER does, after the user get_payloads.
@@ -97,7 +78,6 @@ class SignVerify(object):
                 ce.priv_key_bytes = ce.priv_d.priv_data  # didnt care about securing it.
             # if it IS encrypted, do nothing. Caller must call decrypt(), otherwise sign() will fail.
 
-        # todo: consider merging this with load_pub_block
         ce.pub_type, thingy = structure.load_pub_block(ce.pub_block)
 
         if ce.pub_type == PUB_CSR:      # CSRs are just a cert
@@ -322,4 +302,14 @@ def highlander_check(*args):
     if num_true > 1:
         raise ValueError("Please specify only one mandatory argument (multiple were specified)")
     return True
+
+# Policy:
+# Using the "Store everything in a smart object" approach so that we can get the **APIs usable**
+# Because the library user not losing their mind trying to use us, is more important than some
+# memory usage double-ups, and just adding fields to a smart-object stops us *bogging down on that front*
+# user-facing API usability is a lot more important than memory performance, especially for smallscale stuff like this.
+# Licensing's "Entry and Registry-of-Entries" model seems to work quite well
+# IF we're optimising for "give the user an opaque handle" operations, which we SHOULD ALWAYS be.
+
+# ALWAYS copy-paste THEN DRY. Do NOT try to DRY in-flight!
 

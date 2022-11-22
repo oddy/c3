@@ -228,7 +228,6 @@ def make_visible_fields(dx0, vis_map):
 # 2) Tamper-cross-check the Visible Fields (if any) with their binary block counterparts.
 
 # Policy: if no vis_map schema assume CERT_SCHEMA.
-# Todo: PRIV_CRCWRAP_SCHEMA etc - peek bytes_part's tag & select schema from that.
 
 def text_to_binary_block(text_part):
     # --- Ensure vertical structure is legit ---

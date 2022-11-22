@@ -21,7 +21,7 @@ def c3m():
 
 @pytest.fixture
 def csr_nopass(c3m):
-    ce1 = c3m.make_csr(name="harry", expiry="24 octover 2024")
+    ce1 = c3m.make_csr(name="harry", expiry="24 october 2024")
     ce1.private_key_set_nopassword()
     return ce1
 
@@ -79,7 +79,7 @@ def test_csr_optional_cert_type(c3m, csr_nopass):
 
 
 def test_selfsign_roundtrip_binary(c3m):
-    ce1 = c3m.make_csr(name="harry", expiry="24 octover 2024")
+    ce1 = c3m.make_csr(name="harry", expiry="24 october 2024")
     ce1.private_key_set_nopassword()
     assert ce1.pub_type == PUB_CSR
     c3m.sign(ce1, ce1)      # self sign
@@ -92,7 +92,7 @@ def test_selfsign_roundtrip_binary(c3m):
 
 
 def test_ss_verify_binary(c3m):
-    ce1 = c3m.make_csr(name="harry", expiry="24 octover 2024")
+    ce1 = c3m.make_csr(name="harry", expiry="24 october 2024")
     ce1.private_key_set_nopassword()
     c3m.sign(ce1, ce1)
     ce1_bin = ce1.both.as_binary()
@@ -102,7 +102,7 @@ def test_ss_verify_binary(c3m):
     assert c3m.verify(ce2) is True
 
 def test_ss_verify_text(c3m):
-    ce1 = c3m.make_csr(name="harry", expiry="24 octover 2024")
+    ce1 = c3m.make_csr(name="harry", expiry="24 october 2024")
     ce1.private_key_set_nopassword()
     c3m.sign(ce1, ce1)
     ce1_txt = ce1.both.as_text()
@@ -491,7 +491,7 @@ def test_commandline_full():
 
 # ---------- ID collision ---------------
 
-# todo: port this tests at some point. It's slightly dependend on ID behaviour.
+# todo: port this test at some point. It's slightly dependend on ID behaviour.
 
 # Note signing doesnt fail when we *append* the root9 cert itself into the chain
 #      which you're not supposed to do. It succeeds because root9 is in trusted_CEs and verify

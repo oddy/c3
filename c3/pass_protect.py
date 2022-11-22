@@ -128,7 +128,6 @@ class PassProtect(object):
         base = "libsodium"
         bit_expl = "_64" if sys.maxsize > 2 ** 32 else "_32"
         ext = {"Darwin": "dylib", "Windows": "dll", "Linux": "so"}[platform.system()]
-        # todo: ^^ test linux
 
         # dir is 1) explicit (e.g. apiweb.py bc w3wp.exe), 2) blank->current dir (dev/tool scripts), 3) appdir if frozen exe (prod EXEs)
         if not libsodium_dir and hasattr(sys, "frozen"):

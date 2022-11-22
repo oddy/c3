@@ -194,3 +194,6 @@ class CertEntry(object):
     # Note: there is no inverse for private_key_nopassword because
     #       incoming BARE keys are handled directly by load()
 
+    def private_key_unload(self):
+        self.priv_key_bytes = b""
+

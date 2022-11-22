@@ -19,8 +19,6 @@ def CommandlineMain(cmdline_str=""):
     cmd = args.cmd
     c3m = signverify.SignVerify()
 
-
-
     try:
         # --- CSR / certchain pipeline ---
         if cmd == "make":
