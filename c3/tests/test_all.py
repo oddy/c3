@@ -21,7 +21,7 @@ def c3m():
 
 @pytest.fixture
 def csr_nopass(c3m):
-    ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
+    ce1 = c3m.make_csr(name="harry", expiry="24 octover 2024")
     ce1.private_key_set_nopassword()
     return ce1
 
@@ -69,9 +69,17 @@ def test_csr_roundtrip_text_strip_vf(c3m, csr_nopass):
     ce2_txt = ce2.both.as_text()
     assert ce1_txt == ce2_txt
 
+def test_csr_optional_cert_type(c3m, csr_nopass):
+    csr = csr_nopass
+    txt1 = csr.pub.as_text()
+    assert "[ Cert Type" not in txt1
+    csr.cert["cert_type"] = "Special cert"
+    txt2 = csr.pub.as_text()
+    assert "[ Cert Type"  in txt2
+
 
 def test_selfsign_roundtrip_binary(c3m):
-    ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
+    ce1 = c3m.make_csr(name="harry", expiry="24 octover 2024")
     ce1.private_key_set_nopassword()
     assert ce1.pub_type == PUB_CSR
     c3m.sign(ce1, ce1)      # self sign
@@ -84,7 +92,7 @@ def test_selfsign_roundtrip_binary(c3m):
 
 
 def test_ss_verify_binary(c3m):
-    ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
+    ce1 = c3m.make_csr(name="harry", expiry="24 octover 2024")
     ce1.private_key_set_nopassword()
     c3m.sign(ce1, ce1)
     ce1_bin = ce1.both.as_binary()
@@ -94,7 +102,7 @@ def test_ss_verify_binary(c3m):
     assert c3m.verify(ce2) is True
 
 def test_ss_verify_text(c3m):
-    ce1 = c3m.make_csr(name="harry", expiry_text="24 octover 2024")
+    ce1 = c3m.make_csr(name="harry", expiry="24 octover 2024")
     ce1.private_key_set_nopassword()
     c3m.sign(ce1, ce1)
     ce1_txt = ce1.both.as_text()
@@ -106,7 +114,7 @@ def test_ss_verify_text(c3m):
 
 # --- Try to sign with expired cert ---
 def test_sign_expired(c3m):
-    expi = c3m.make_csr(name="expi", expiry_text="24 oct 2002")
+    expi = c3m.make_csr(name="expi", expiry="24 oct 2002")
     with pytest.raises(CertExpired):
         c3m.sign(expi, expi)
 
@@ -115,10 +123,10 @@ def test_sign_expired(c3m):
 # Note: CEs must come in via load() for full chain-unpacking, dont use them directly.
 
 def test_inter_sign_verify(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
 
-    inter = c3m.make_csr(name="inter2", expiry_text="24 oct 2024")
+    inter = c3m.make_csr(name="inter2", expiry="24 oct 2024")
     assert inter.pub_type == PUB_CSR
     c3m.sign(inter, selfsigned)
     assert inter.pub_type == PUB_CERTCHAIN
@@ -127,10 +135,21 @@ def test_inter_sign_verify(c3m):
     inter2 = c3m.load(block=inter.pub.as_binary())
     assert c3m.verify(inter2) is True
 
+# ----- typechain and namechain metadata functions ----
+
+def test_inter_namechain(c3m):
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024", cert_type="rootcert")
+    c3m.sign(selfsigned, selfsigned)
+    inter = c3m.make_csr(name="inter2", expiry="24 oct 2024", cert_type="intercert")
+    c3m.sign(inter, selfsigned)
+    inter2 = c3m.load(block=inter.pub.as_binary())
+    assert "/"+"/".join(inter2.chain_names()) == "/root1/inter2"
+    assert "/"+"/".join(inter2.chain_types()) == "/rootcert/intercert"
+
 # ----- Payload signing / verifying ----
 
 def test_payload_sign_verify(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
 
     payload = b"Hello i am a payload"
@@ -146,9 +165,9 @@ def test_payload_sign_verify(c3m):
 # ---- Sign using intermediate ----
 
 def test_payload_sign_intermediate(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
-    inter = c3m.make_csr(name="inter2", expiry_text="24 oct 2024")
+    inter = c3m.make_csr(name="inter2", expiry="24 oct 2024")
     c3m.sign(inter, selfsigned)
     payload = b"Hello i am a payload"
     pce = c3m.make_payload(payload)
@@ -165,17 +184,17 @@ def test_payload_sign_intermediate(c3m):
 # --- load-to-sign (instead of make_csr-to-sign ---
 
 def test_load_to_sign(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
     selfsigned.private_key_set_nopassword()
     ss2 = c3m.load(block=selfsigned.both.as_binary())
-    inter = c3m.make_csr(name="inter2", expiry_text="24 oct 2024")
+    inter = c3m.make_csr(name="inter2", expiry="24 oct 2024")
     c3m.sign(inter, ss2)
 
 # --- Didn't set the priv key bare (or encrypt) ---
 
 def test_load_to_sign_priv_key_unset(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
     with pytest.raises(OutputError):
         ss_bin = selfsigned.both.as_binary()
@@ -184,26 +203,26 @@ def test_load_to_sign_priv_key_unset(c3m):
 # ---- Private key encrypt/decrypt (password in code) ---
 
 def test_privkey_encrypt(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
     selfsigned.private_key_encrypt("hunter3")
 
     ss2 = c3m.load(block=selfsigned.both.as_binary())
     ss2.private_key_decrypt("hunter3")
-    inter = c3m.make_csr(name="inter2", expiry_text="24 oct 2024")
+    inter = c3m.make_csr(name="inter2", expiry="24 oct 2024")
 
     c3m.sign(inter, ss2)
 
 
 def test_privkey_encrypt_env_var(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
     os.environ["C3_PASSWORD"] = "Password01!"   # Note: this side-effects the rest of the tests!
     selfsigned.private_key_encrypt_user()
 
     ss2 = c3m.load(block=selfsigned.both.as_binary())
     ss2.private_key_decrypt_user()
-    inter = c3m.make_csr(name="inter2", expiry_text="24 oct 2024")
+    inter = c3m.make_csr(name="inter2", expiry="24 oct 2024")
 
     c3m.sign(inter, ss2)
 
@@ -328,8 +347,8 @@ def test_load_fuzz(c3m):
 # of api misuse / user error.
 
 def test_keypair_matching(c3m):
-    ce1 = c3m.make_csr(name="root1", expiry_text="24 oct 2024")
-    ce2 = c3m.make_csr(name="root1", expiry_text="24 oct 2024")  # note simulating same name
+    ce1 = c3m.make_csr(name="root1", expiry="24 oct 2024")
+    ce2 = c3m.make_csr(name="root1", expiry="24 oct 2024")  # note simulating same name
     ce2.priv_key_bytes = ce1.priv_key_bytes   # overwrite ce2 priv with ce1 priv.
     with pytest.raises(SignError, match="Private key and public key do not match"):
         c3m.sign(ce2, ce2)
@@ -387,7 +406,7 @@ LI_VISFIELDS = [ ["org", "Organization"], "hostnames", ["typ", "License Type"] ]
 LI_VISMAP = dict(schema=LI_SCHEMA, field_map=LI_VISFIELDS)
 
 def test_payload_verify_text(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
     payload_d = dict(typ="type 1", org="Hello Ltd", hostnames="fred")
     payload = b3.schema_pack(LI_SCHEMA, payload_d)
@@ -397,10 +416,11 @@ def test_payload_verify_text(c3m):
     c3m.load_trusted_cert(block=selfsigned.pub.as_binary())
     pce2 = c3m.load(text=pce_txt)
     assert c3m.verify(pce2) is True
+    assert pce2.payload == payload
 
 
 def test_payload_verify_text_visfields_noschema(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
     payload_d = dict(typ="type 1", org="Hello Ltd", hostnames="fred")
     payload = b3.schema_pack(LI_SCHEMA, payload_d)
@@ -415,7 +435,7 @@ def test_payload_verify_text_visfields_noschema(c3m):
 
 
 def test_payload_verify_text_visfields(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
     payload_d = dict(typ="type 1", org="Hello Ltd", hostnames="fred")
     payload = b3.schema_pack(LI_SCHEMA, payload_d)
@@ -428,7 +448,7 @@ def test_payload_verify_text_visfields(c3m):
 
 
 def test_payload_verify_text_visfields_tamper(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry_text="24 october 2024")
+    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024")
     c3m.sign(selfsigned, selfsigned)
     payload_d = dict(typ="type 1", org="Hello Ltd", hostnames="fred")
     payload = b3.schema_pack(LI_SCHEMA, payload_d)

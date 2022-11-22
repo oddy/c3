@@ -19,14 +19,14 @@ def CommandlineMain(cmdline_str=""):
     cmd = args.cmd
     c3m = signverify.SignVerify()
 
-    # Todo: it would be nice if the text description included whether things were CSRs etc.
+
 
     try:
         # --- CSR / certchain pipeline ---
         if cmd == "make":
             parts = args.parts
             # --- pub cert (signing request) ---
-            csr = c3m.make_csr(name=args.name, expiry_text=args.expiry)
+            csr = c3m.make_csr(name=args.name, expiry=args.expiry, cert_type=args.type)
             # --- private key (encrypt) ---
             if "nopassword" in args:
                 csr.private_key_set_nopassword()
@@ -166,8 +166,11 @@ class ArgvArgs(dict):
             if z:
                 k, v = z.groups()
                 self[k] = v
+        self.optional_args = ["type"]
     def __getattr__(self, name):
         if name not in self:
+            if name in self.optional_args:
+                return None
             raise Exception("Please specify missing commandline argument   --%s="%name)
         return self[name]
 

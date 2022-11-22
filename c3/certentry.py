@@ -98,11 +98,22 @@ class CertEntry(object):
 
         self.vis_map = {}
         self.default_vismap = dict(schema=CERT_SCHEMA,
-                                    field_map=["subject_name", "expiry_date", "issued_date"])
+                                   field_map=["subject_name", "expiry_date", "issued_date", "cert_type"])
         # Output class instances, so user can go ce.pub.as_text(), ce.both.as_binary() etc.
         self.pub = CeOutPub(self)
         self.priv = CeOutPriv(self)
         self.both = CeOutBoth(self)
+
+    # ============== Metadata access functions =============================================
+
+    def chain_certs(self):
+        return reversed([i["cert"] for i in self.chain if "cert" in i])
+
+    def chain_types(self):
+        return [i.get("cert_type", "") for i in self.chain_certs()]
+
+    def chain_names(self):
+        return [i["subject_name"] for i in self.chain_certs()]
 
 
     # ============== Private key encrypt ===================================================

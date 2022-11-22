@@ -2,6 +2,7 @@
 # C3 private & public text-file format saving, loading & validation
 
 import os, base64, re, functools, datetime
+from pprint import pprint
 
 import b3
 
@@ -167,11 +168,11 @@ def map_field_names(field_names):
 
 # In: block_part bytes, schema for first dict, field names to output in visible format
 # Out: field names & values as text lines (or exceptions)
+# NOTE: we only generate field if it has a value. (so no for empty or None values, even if vis_map asks)
 
 def make_visible_fields(dx0, vis_map):
     schema = vis_map["schema"]
     field_names = vis_map["field_map"]
-
     key_names, key_to_visible, _ = map_field_names(field_names)
 
     # --- Cross-check whether wanted fields exist (and map names to types) ---
@@ -179,7 +180,7 @@ def make_visible_fields(dx0, vis_map):
     # The rest of the SignVerify system is fully payload-agnostic but we aren't.
     types_by_name = {}
     for typ, name in [i[:2] for i in schema]:
-        if name in dx0 and name in key_names:
+        if name in key_names and name in dx0 and dx0[name]:
             types_by_name[name] = typ
     if not types_by_name:
         raise TextStructureError("No wanted visible fields found in the secure block")
@@ -191,6 +192,7 @@ def make_visible_fields(dx0, vis_map):
     for name in key_names:
         if name not in types_by_name:
             continue
+
         fname = key_to_visible[name]
         typ = types_by_name[name]
         val = dx0[name]     # in
