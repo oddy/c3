@@ -7,8 +7,7 @@ from c3.constants import *
 from c3.errors import *
 from c3 import certentry, keypairs
 from c3 import structure, textfiles
-from c3 import pass_protect
-from c3 import commandline
+from c3 import pass_protect, parsedate
 from c3.structure import AttrDict
 
 # Policy: anything with "block" in the name is bytes.
@@ -127,7 +126,7 @@ class SignVerify(object):
     #       option of e.g. adjusting the wanted expiry date, etc.
 
     def make_csr(self, name, expiry, cert_type=None):
-        expiry = commandline.ParseBasicDate(expiry)
+        expiry = parsedate.ParseBasicDate(expiry)
         ce = certentry.CertEntry(self)
         ce.pub_type = PUB_CSR
         ce.name = name
