@@ -152,7 +152,8 @@ class SignVerify(object):
         ce.pub_type = PUB_CSR
         ce.name = name
 
-        cert_id = name.encode("ascii")
+        #cert_id = name.encode("ascii")  # if we want deterministic cert_ids e.g. for testing
+        cert_id = structure.gen_ulid()
         today = datetime.date.today()
         key_priv, key_pub = keypairs.generate(keytype=KT_ECDSA_SECP256K1)
 

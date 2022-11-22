@@ -47,6 +47,7 @@ CERT_SCHEMA = (
     (b3.BYTES,     "public_key",    3, True),
     (b3.BASICDATE, "expiry_date",   4, True),
     (b3.BASICDATE, "issued_date",   5, True),
+    (b3.UTF8,      "cert_type",     6, False),
 )
 
 SIG_SCHEMA = (

@@ -1,7 +1,7 @@
 
 # C3 private & public binary block structure saving, loading & validation
 
-import copy, binascii, datetime
+import copy, binascii, time, struct, os
 
 from c3.constants import *
 from c3.errors import StructureError, IntegrityError, CertExpired
@@ -217,53 +217,35 @@ def ctnm(das):
 
 # --------------------------------------------------------------------------------------------------
 
-
-#
-# def toplevel_header_key(buf):
-#     if not buf:
-#         raise StructureError("No data - buffer is empty or None")
-#     try:
-#         key, data_type, has_data, is_null, data_len, index = b3.decode_header(buf, 0)
-#     except (IndexError, UnicodeDecodeError):
-#         raise StructureError("Header structure is invalid")  # from None
-#     return key
+# ULID generator that doesn't care about trying to be sub-millisecond monotonic.
+def gen_ulid():
+    stamp_bytes = struct.pack(">Q", int(time.time() * 1000.0))[2:]
+    rand_bytes = os.urandom(10)
+    return stamp_bytes + rand_bytes
 
 
-# Making ULIDS
+# Note: a better approach here is to use micro or nanosecond timers.
+# This guy has a number of good strategies:  https://github.com/RobThree/NUlid/tree/master/NUlid/Rng
+# random vs monotonic is a tradeoff-spectrum, with cryptographically-secure RNG at one and and
+# "just use DB autoincrement fields instead" at the other.
+
+
+# ULID gen using super basic "keep trying random numbers" monotonic-increase tekneeq
+# Dont want it sucking systems dry of urandom though.
+# prev_rand = None
+# prev_stamp = None
+# def gen_ulid():
+#     global prev_rand, prev_stamp
+#     nn = 0
+#     stamp = int(time.time() * 1000.0)
+#     stamp_bytes = struct.pack(">Q", stamp)[2:]
+#     rand_bytes = os.urandom(10)
+#     if stamp == prev_stamp and prev_rand is not None:
+#         while rand_bytes < prev_rand:
+#             nn += 1
+#             rand_bytes = os.urandom(10)
+#     prev_rand = rand_bytes
+#     prev_stamp = stamp
+#     return stamp, nn, stamp_bytes + rand_bytes
 
 # Courtesy of https://github.com/valohai/ulid2/blob/master/ulid2/__init__.py
-#
-# import time, calendar, struct
-# _last_entropy = None
-# _last_timestamp = None
-#
-# def generate_binary_ulid(timestamp=None, monotonic=False):
-#     """
-#     Generate the bytes for an ULID.
-#     :param timestamp: An optional timestamp override.
-#                       If `None`, the current time is used.
-#     :type timestamp: int|float|datetime.datetime|None
-#     :param monotonic: Attempt to ensure ULIDs are monotonically increasing.
-#                       Monotonic behavior is not guaranteed when used from multiple threads.
-#     :type monotonic: bool
-#     :return: Bytestring of length 16.
-#     :rtype: bytes
-#     """
-#     global _last_entropy, _last_timestamp
-#     if timestamp is None:
-#         timestamp = time.time()
-#     elif isinstance(timestamp, datetime.datetime):
-#         timestamp = calendar.timegm(timestamp.utctimetuple())
-#
-#     ts = int(timestamp * 1000.0)
-#     ts_bytes = struct.pack(b'!Q', ts)[2:]
-#     entropy = os.urandom(10)
-#     if monotonic and _last_timestamp == ts and _last_entropy is not None:
-#         while entropy < _last_entropy:
-#             entropy = os.urandom(10)
-#     _last_entropy = entropy
-#     _last_timestamp = ts
-#     return ts_bytes + entropy
-#
-
-
