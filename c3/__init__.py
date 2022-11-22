@@ -5,6 +5,7 @@ __version__ = "1.0.1"
 
 from c3.errors import *
 from c3.signverify import SignVerify
+from c3.commandline import ParseBasicDate
 
 # "note: __all__ affects the from <module> import * behavior only."
 __all__ = [
