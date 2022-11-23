@@ -204,7 +204,10 @@ def make_visible_fields(dx0, vis_map):
         elif typ == b3.SCHED:
             fval = "%s, %s" % (val.strftime("%-I:%M%p").lower(), val.strftime("%-d %B %Y"))
         elif typ == b3.BASICDATE:
-            fval = val.strftime("%-d %B %Y")
+            # fval = val.strftime("%-d %B %Y")  # lame can't use %-d (no leading 0) on windows.
+            fval = val.strftime("%d %B %Y")
+            if fval[0] == "0":
+                fval = fval[1:]
         else:
             fval = str(val)
         line_items.append((fname, fval))

@@ -109,7 +109,7 @@ class CertEntry(object):
     def chain_certs(self):
         return reversed([i["cert"] for i in self.chain if "cert" in i])
 
-    def chain_types(self):
+    def chain_types(self):          # NOTE This doesn't include linked-by-name and it needs to.D
         return [i.get("cert_type", "") for i in self.chain_certs()]
 
     def chain_names(self):
