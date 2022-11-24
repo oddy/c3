@@ -211,7 +211,7 @@ def ctnm(das):
     if not das:
         return ""
     if "cert" in das:
-        return " (cert %r) " % das.cert.cert_id
+        return " (cert %r) " % das.cert.subject_name
     else:
         return " (payload) "
 

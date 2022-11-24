@@ -135,16 +135,30 @@ def test_inter_sign_verify(c3m):
     inter2 = c3m.load(block=inter.pub.as_binary())
     assert c3m.verify(inter2) is True
 
-# ----- typechain and namechain metadata functions ----
+# ----- verify-chain metadata functions ----
 
 def test_inter_namechain(c3m):
-    selfsigned = c3m.make_csr(name="root1", expiry="24 october 2024", cert_type="rootcert")
-    c3m.sign(selfsigned, selfsigned)
-    inter = c3m.make_csr(name="inter2", expiry="24 oct 2024", cert_type="intercert")
-    c3m.sign(inter, selfsigned)
-    inter2 = c3m.load(block=inter.pub.as_binary())
-    assert "/"+"/".join(inter2.chain_names()) == "/root1/inter2"
-    assert "/"+"/".join(inter2.chain_types()) == "/rootcert/intercert"
+    root1 = c3m.make_csr(name="root1", expiry="24 october 2024", cert_type="rootcert")
+    c3m.sign(root1, root1)
+    inter2 = c3m.make_csr(name="inter2", expiry="24 oct 2024", cert_type="inter")
+    c3m.sign(inter2, root1, link_by_name=True)
+    inter3 = c3m.make_csr(name="inter3", expiry="24 oct 2024", cert_type="inter")
+    c3m.sign(inter3, inter2, link_by_name=False)
+    inter4 = c3m.make_csr(name="inter4", expiry="24 oct 2024", cert_type="inter")
+    c3m.sign(inter4, inter3, link_by_name=False)
+    pay = c3m.make_payload(b"hello world")
+    c3m.sign(pay, inter4, link_by_name=False)
+    # --- Verify ---
+    pay_block = pay.pub.as_binary()
+    pay2 = c3m.load(block=pay_block)
+
+    c3m.load_trusted_cert(block=root1.pub.as_binary())
+    # c3m.load_trusted_cert(block=inter2.pub.as_binary())
+    # c3m.load_trusted_cert(block=inter3.pub.as_binary())
+    c3m.verify(pay2)
+    assert pay2.vtypes() == "/rootcert/inter/inter/inter"
+    assert pay2.vnames() == "/root1/inter2/inter3/inter4"
+
 
 # ----- Payload signing / verifying ----
 

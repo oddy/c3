@@ -247,6 +247,7 @@ class SignVerify(object):
 
     def verify(self, ce):
         chain = ce.chain
+        ce.vcerts = []      # Computed trail, includes trusted_certs
         if not chain:
             raise StructureError("Cannot verify - no cert chain present")
         if "sig" not in chain[0]:
@@ -256,22 +257,28 @@ class SignVerify(object):
         found_in_trusted = False         # whether we have established a link to the trusted_ces
 
         for i, das in enumerate(chain):
-            signing_cert_id = das.sig.signing_cert_id
+            if "cert" in das:
+                ce.vcerts = [das.cert] + ce.vcerts
+
             # --- Find the 'next cert' ie the one which verifies our signature ---
+            signing_cert_id = das.sig.signing_cert_id
             if not signing_cert_id:
                 # --- no signing-id means "next cert in the chain" ---
                 if i + 1 >= len(chain):      # have we fallen off the end?
                     raise ShortChainError(structure.ctnm(das)+"Next issuer cert is missing")
                 next_cert = chain[i + 1].cert
             else:
-                # --- got a name, look in trusted for it, then in ourself (self-signed) ---
+                # --- got a name, look in trusted for it ---
                 if signing_cert_id in self.trusted_ces:
-                    next_cert = self.trusted_ces[signing_cert_id].cert
+                    tr_ce = self.trusted_ces[signing_cert_id]
+                    next_cert = tr_ce.cert
+                    ce.vcerts = tr_ce.vcerts + ce.vcerts
                     found_in_trusted = True
+                # --- otherwise look in our own supplied chain ---
                 elif signing_cert_id in certs_by_id:
                     next_cert = certs_by_id[signing_cert_id]
                 else:
-                    raise CertNotFoundError(structure.ctnm(das)+"wanted cert %r not found" % signing_cert_id)
+                    raise CertNotFoundError(structure.ctnm(das)+"signing cert not found (id %r)" % signing_cert_id)
 
             # --- Actually verify the signature ---
             try:
@@ -286,6 +293,7 @@ class SignVerify(object):
         # Even tho all errors are exceptions.
         if found_in_trusted:
             return True
+
         raise UntrustedChainError("Chain does not link to trusted certs")
 
 
