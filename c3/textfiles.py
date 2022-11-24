@@ -107,9 +107,11 @@ def load_files(name):
     both_text_block = ""
     pub_text_block = ""
     priv_text_block = ""
+    file_found = False
 
     combine_name = name + ".b64.txt"
     if os.path.isfile(combine_name):
+        file_found = True
         both_text_block = open(combine_name, "r").read()
         hdrs = list(re.finditer(header_rex, both_text_block, re.MULTILINE))
         if len(hdrs) != 2:
@@ -117,6 +119,7 @@ def load_files(name):
 
     pub_only_name = name + ".public.b64.txt"
     if os.path.isfile(pub_only_name):
+        file_found = True
         if both_text_block:
             raise ValueError("Both combined and public-only files exist, please remove one")
         pub_text_block = open(pub_only_name, "r").read()
@@ -126,12 +129,16 @@ def load_files(name):
 
     priv_only_name = name + ".PRIVATE.b64.txt"
     if os.path.isfile(priv_only_name):
+        file_found = True
         if both_text_block:
             raise ValueError("Both combined and public-only files exist, please remove one")
         priv_text_block = open(priv_only_name, "r").read()
         hdrs = list(re.finditer(header_rex, priv_text_block, re.MULTILINE))
         if len(hdrs) != 1:
             print(" Warning: too %s headers in public file" % ("many" if len(hdrs) > 1 else "few"))
+
+    if not file_found:
+        raise ValueError("No public or private or combined files found for '%s'" % (name,))
 
     if not both_text_block:
         both_text_block = pub_text_block + "\n\n" + priv_text_block
