@@ -112,11 +112,18 @@ class CertEntry(object):
             return self.vcerts[1:]      # verify() can double-add the root cert under certain
         return self.vcerts              # circumstances (link name vs append etc)
 
+    def blankify(self, dx, key):        # turns absence and None into "<none>"
+        if key not in dx:
+            return "<none>"
+        if dx[key] is None:
+            return "<none>"
+        return str(dx[key])
+
     def vtypes(self):
-        return "/"+"/".join([i.get("cert_type", "") for i in self.vchain()])
+        return "/"+"/".join([self.blankify(i, "cert_type") for i in self.vchain()])
 
     def vnames(self):
-        return "/"+"/".join([i["subject_name"] for i in self.vchain()])
+        return "/"+"/".join([self.blankify(i, "subject_name") for i in self.vchain()])
 
 
     # ============== Private key encrypt ===================================================
