@@ -4,6 +4,7 @@
 import sys, os
 
 from c3.constants import PASS_VAR, SHOW_VAR
+from c3.errors import NoPassword
 
 if sys.platform == "win32":
     from msvcrt import getch  # noqa
@@ -49,7 +50,7 @@ def enter_password(prompt="Password: ", mask=True):
             sys.stdout.flush()
             return "".join(pw)
         elif cc == 27:       # escape
-            return ""
+            raise NoPassword("No password supplied")
         elif cc == 3:        # ctrl=c
             raise KeyboardInterrupt
         elif cc in (8, 127):  # backspace, del
@@ -87,12 +88,7 @@ def get_double_enter_setting_password(prompt1, prompt2):
     else:
         while True:
             pass1 = get_enter_password(prompt1)
-            if not pass1:
-                return ""                        # user abort
             pass2 = get_enter_password(prompt2)
-            if not pass2:
-                return ""                        # user abort
-
             if pass1 == pass2:
                 return pass1
             else:

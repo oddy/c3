@@ -27,4 +27,6 @@ class OutputError(C3Error):         # cant output a CE for some reason - usually
     pass
 class CertExpired(SignError):       # can't sign, --using's cert has expired.
     pass
+class NoPassword(C3Error):          # user aborted entering passwords
+    pass
 

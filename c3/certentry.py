@@ -141,10 +141,8 @@ class CertEntry(object):
     def private_key_encrypt_user(self):
         self.private_key_encrypt_sanity_checks()
         prompt1 = "Enter password to set on private key > "
-        prompt2 = "Re-enter private key password        > "
+        prompt2 = "Re-enter set private key password    > "
         passw = getpassword.get_double_enter_setting_password(prompt1, prompt2)
-        if not passw:
-            raise ValueError("No password supplied, exiting")
         epriv_bytes = self.parent().pass_protect.SinglePassEncrypt(self.priv_key_bytes, passw)
         self.epriv_block = structure.make_priv_block(epriv_bytes, bare=False)
 
@@ -186,13 +184,10 @@ class CertEntry(object):
             return
 
         # --- Try password from user ---
-        prompt = "Password to unlock private key: "
+        prompt = "Password to unlock private key > "
         priv_ret = b""
         while not priv_ret:
             passw = getpassword.get_enter_password(prompt)
-            if not passw:
-                raise ValueError("No password supplied, exiting")
-
             try:
                 priv_ret = self.parent().pass_protect.SinglePassDecrypt(self.priv_d.priv_data, passw)
             except Exception as e:
