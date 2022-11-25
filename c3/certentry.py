@@ -15,6 +15,9 @@ from c3.structure import AttrDict
 
 # Note: textfiles.load_files is the inverse of the write_text_file functions here.
 
+# Policy: It is expected with these out objects that if a priv one is called (priv or both), that
+#         priv is wanted. So e.g. .both. should fail if no priv present, rather than being smart.
+
 class CeOutPub(object):
     def __init__(self, ce_parent):
         self.ce = ce_parent
@@ -27,8 +30,11 @@ class CeOutPub(object):
 
     def write_text_file(self, filename, vis_map=None, desc=""):
         txt = self.as_text(vis_map, desc)
-        with open(filename+".public.b64.txt", "wt") as f:
+        fname = filename + ".public.b64.txt"
+        with open(fname, "wt") as f:
             f.write(txt)
+        if self.ce.write_prints:
+            print("Wrote file '%s'" % (fname,))
         return
 
 
@@ -48,8 +54,11 @@ class CeOutPriv(object):
 
     def write_text_file(self, filename, vis_map=None, desc=""):
         txt = self.as_text(vis_map, desc)
-        with open(filename+".PRIVATE.b64.txt", "wt") as f:
+        fname = filename + ".PRIVATE.b64.txt"
+        with open(fname, "wt") as f:
             f.write(txt)
+        if self.ce.write_prints:
+            print("Wrote file '%s'" % (fname,))
 
 
 class CeOutBoth(object):
@@ -70,8 +79,12 @@ class CeOutBoth(object):
 
     def write_text_file(self, filename, vis_map=None, desc=""):
         txt = self.as_text(vis_map, desc)
-        with open(filename+".b64.txt", "wt") as f:
+        fname = filename+".b64.txt"
+        with open(fname, "wt") as f:
             f.write(txt)
+        if self.ce.write_prints:
+            print("Wrote file '%s'" % (fname,))
+
 
 
 
@@ -100,10 +113,15 @@ class CertEntry(object):
         self.vis_map = {}
         self.default_vismap = dict(schema=CERT_SCHEMA,
                                    field_map=["subject_name", "expiry_date", "issued_date", "cert_type"])
+
+        self.files_combined = True      # whether cert was loaded from split files or combined file
+        self.write_prints = False       # print helpful messages to console when writing files
+
         # Output class instances, so user can go ce.pub.as_text(), ce.both.as_binary() etc.
         self.pub = CeOutPub(self)
         self.priv = CeOutPriv(self)
         self.both = CeOutBoth(self)
+
 
     # ============== Metadata access functions =============================================
 
@@ -202,3 +220,35 @@ class CertEntry(object):
     def private_key_unload(self):
         self.priv_key_bytes = b""
 
+
+    # ============== Files output ===========================================================
+
+    # Note: For use by commandline operations.
+    # text file writer, partial inverse of signverify.load().
+    def write_files(self, parts=None, write_prints=False):
+        self.write_prints = write_prints
+        # --- Caller has specified --parts explicitly, priv MUST exist. ---
+        #    (priv & both will error if not)
+        if parts:
+            if parts == "split":
+                self.pub.write_text_file(self.name)
+                self.priv.write_text_file(self.name)
+            elif parts == "combine":
+                self.both.write_text_file(self.name)
+            else:
+                raise OutputError("--parts= must be 'split' or 'combine'")
+            return
+        # --- Special case - after make_csr if there's priv_key_bytes but no epriv_block, ---
+        # --- error out because user needs to call encrypt or nopass.                     ---
+        if self.priv_key_bytes and not self.epriv_block:
+            raise OutputError("Please encrypt() or nopassword() the private key")
+        # --- Otherwise if there's no epriv_block (e.g. pub-only load) just write pub ---
+        if not self.epriv_block:
+            self.pub.write_text_file(self.name)
+            return
+        # --- If there IS epriv_block then save it how it was loaded ---
+        if self.files_combined:
+            self.both.write_text_file(self.name)
+        else:
+            self.pub.write_text_file(self.name)
+            self.priv.write_text_file(self.name)

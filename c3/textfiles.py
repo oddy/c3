@@ -41,26 +41,21 @@ def make_pub_txt_str_ce(ce, desc, vis_map=None):
         pub_ff_lines = make_visible_fields(payload_dict, vis_map)
     if ce.pub_type in (PUB_CSR, PUB_CERTCHAIN):
         pub_ff_lines = make_visible_fields(ce.cert, ce.default_vismap)
-    return make_pub_txt_str(ce.pub_block, ce.name, desc, pub_ff_lines)
 
-def make_pub_txt_str(public_part, name="", desc="", pub_ff_lines=""):
-    pub_desc = "Payload / Cert chain"
-    if name:
-        pub_desc = name + " - " + pub_desc
+    pub_desc = {PUB_PAYLOAD : "Payload", PUB_CSR : "Cert sign request", PUB_CERTCHAIN : "Cert chain"}[ce.pub_type]
+    if ce.name:
+        pub_desc = ce.name + " - " + pub_desc
     if desc:
         pub_desc = desc
 
     if pub_ff_lines:
         pub_ff_lines += "\n"
-    pub_str = asc_header(pub_desc) + "\n" + pub_ff_lines + b64_encode(public_part).decode()
+    pub_str = asc_header(pub_desc) + "\n" + pub_ff_lines + b64_encode(ce.pub_block).decode()
     return pub_str
 
 def make_priv_txt_str_ce(ce, desc):     # note no vis_map yet
-    return make_priv_txt_str(ce.epriv_block, ce.name, desc)
-
-def make_priv_txt_str(priv_block, name="", desc=""):
-    priv_desc = (desc or name) + " - PRIVATE Key"
-    priv_str = asc_header(priv_desc) + "\n" + b64_encode(priv_block).decode()
+    priv_desc = (desc or ce.name) + " - PRIVATE Key"
+    priv_str = asc_header(priv_desc) + "\n" + b64_encode(ce.epriv_block).decode()
     return priv_str
 
 
@@ -108,6 +103,7 @@ def load_files(name):
     pub_text_block = ""
     priv_text_block = ""
     file_found = False
+    parts_combined = False
 
     combine_name = name + ".b64.txt"
     if os.path.isfile(combine_name):
@@ -116,6 +112,7 @@ def load_files(name):
         hdrs = list(re.finditer(header_rex, both_text_block, re.MULTILINE))
         if len(hdrs) != 2:
             raise TextStructureError("Number of headers in combined file is not 2")
+        parts_combined = True
 
     pub_only_name = name + ".public.b64.txt"
     if os.path.isfile(pub_only_name):
@@ -142,7 +139,7 @@ def load_files(name):
 
     if not both_text_block:
         both_text_block = pub_text_block + "\n\n" + priv_text_block
-    return both_text_block
+    return both_text_block, parts_combined
 
 
 # ============================== visible Fields ===============================================

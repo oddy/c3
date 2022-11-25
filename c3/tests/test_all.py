@@ -489,7 +489,7 @@ c3 signpayload --payload=payload.txt --using=inter1
 c3 verify      --name=payload.txt --trusted=root1
 """
 
-@pytest.mark.skip(reason="writes files - enable in code for more coverage")
+#@pytest.mark.skip(reason="writes files - enable in code for more coverage")
 def test_commandline_full():
     os.environ["C3_PASSWORD"] = "Password01!"
     with open("payload.txt", "wt") as f:

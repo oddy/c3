@@ -8,6 +8,7 @@ import sys, re, datetime, shlex
 from pprint import pprint
 
 from c3.signverify import SignVerify
+from c3.errors import NoPassword
 
 # Use cases:
 # * Make license (sign),  verify license
@@ -22,20 +23,23 @@ def CommandlineMain(cmdline_str=""):
     try:
         # --- CSR / certchain pipeline ---
         if cmd == "make":
-            parts = args.parts
             # --- pub cert (signing request) ---
             csr = c3m.make_csr(name=args.name, expiry=args.expiry, cert_type=args.type)
             # --- private key (encrypt) ---
             if "nopassword" in args:
                 csr.private_key_set_nopassword()
             else:
-                csr.private_key_encrypt_user()
+                try:
+                    csr.private_key_encrypt_user()
+                except NoPassword:
+                    print("\nNo password entered, bailing.")
+                    return
             # --- save file(s) ---
-            write_out_file(csr, parts, args.name)
+            csr.write_files(args.parts, True)     # note: args.parts can be None
+            print("Success!")
             return
 
         if cmd == "signcert":
-            parts = args.parts
             to_sign = c3m.load(filename=args.name)
             if args.using == "self":
                 signer = to_sign
@@ -44,7 +48,8 @@ def CommandlineMain(cmdline_str=""):
             link_by_name = "link" in args and args.link == "name"
             signer.private_key_decrypt_user()
             c3m.sign(to_sign, signer, link_by_name)
-            write_out_file(to_sign, parts, args.name)
+            to_sign.write_files(args.parts, True)
+            print("Success!")
             return
 
         # --- Payload pipeline ---
@@ -53,7 +58,9 @@ def CommandlineMain(cmdline_str=""):
             payload = c3m.make_payload(open(args.payload, "rb").read())
             signer.private_key_decrypt_user()
             c3m.sign(payload, signer)
+            payload.write_prints = True
             payload.pub.write_text_file(args.payload)
+            print("Success!")
             return
 
         # --- Load & verify ---
@@ -85,26 +92,17 @@ def CommandlineMain(cmdline_str=""):
             return
 
 
-def write_out_file(ce, parts, name):
-    # --- Write split or combined text files ---
-    if parts == "split":
-        ce.pub.write_text_file(name)
-        ce.priv.write_text_file(name)
-    elif parts == "combine":
-        ce.both.write_text_file(name)
-    else:
-        print("\nERROR:  Please specify --parts=split or --parts=combine")
-
-
 def Usage(msg=""):
     help_txt = """%s
 Usage:
-    c3 make        --name=root1  --expiry="24 oct 2024" --parts=split
-    c3 signcert    --name=root1  --using=self           --parts=split
-    c3 make        --name=inter1 --expiry="24 oct 2024" --parts=combine
-    c3 signcert    --name=inter1 --using=root1          --parts=combine
+    c3 make        --name=root1  --expiry="24 oct 2024" 
+    c3 signcert    --name=root1  --using=self           
+    c3 make        --name=inter1 --expiry="24 oct 2024"
+    c3 signcert    --name=inter1 --using=root1
     c3 signpayload --payload=payload.txt --using=inter1
-    c3 verify      --name=payload.txt --trusted=root1
+    c3 verify      --name=payload.txt    --trusted=root1
+    make options   --type=rootcert --parts=split/combine --nopassword=y
+    sign options   --link=name/append
     """ % (msg,)
     print(help_txt)
 
@@ -124,7 +122,7 @@ class ArgvArgs(dict):
             if z:
                 k, v = z.groups()
                 self[k] = v
-        self.optional_args = ["type"]
+        self.optional_args = ["type", "parts"]
     def __getattr__(self, name):
         if name not in self:
             if name in self.optional_args:

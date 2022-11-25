@@ -54,7 +54,7 @@ class SignVerify(object):
         # Note: this if-flow works because text_file, text, and block are mutually exclusive
         # --- LOAD from aguments ---
         if filename:
-            text = textfiles.load_files(filename)
+            text, ce.files_combined = textfiles.load_files(filename)
 
         if text:  # Text is EITHER, public text, private text, or both texts concatenated.
             ce.pub_text, ce.epriv_text = textfiles.split_text_pub_priv(text)
@@ -259,7 +259,6 @@ class SignVerify(object):
         for i, das in enumerate(chain):
             if "cert" in das:
                 ce.vcerts = [das.cert] + ce.vcerts
-
             # --- Find the 'next cert' ie the one which verifies our signature ---
             signing_cert_id = das.sig.signing_cert_id
             if not signing_cert_id:
@@ -285,15 +284,11 @@ class SignVerify(object):
                 keypairs.verify(next_cert, das.data_part, das.sig.signature)
             except Exception:       # wrap theirs with our own error class
                 raise InvalidSignatureError(structure.ctnm(das)+"Signature failed to verify")
-
             # --- Now do next das in line ---
 
         # Chain verifies completed without problems. Make sure we got to a trust store cert.
-        # If there is a payload, return it otherwise return True. (So bool-ness works.)
-        # Even tho all errors are exceptions.
         if found_in_trusted:
             return True
-
         raise UntrustedChainError("Chain does not link to trusted certs")
 
 
