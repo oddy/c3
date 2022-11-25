@@ -1,7 +1,7 @@
 
 # Compact Crypto Certs (C3) Public API
 
-__version__ = "1.0.7"
+__version__ = "1.0.8"
 
 from c3.errors import *
 from c3.signverify import SignVerify

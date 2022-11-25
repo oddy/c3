@@ -67,7 +67,9 @@ def split_text_pub_priv(text_in):
     pub_text_block = ""
     priv_text_block = ""
 
-    if num_hdrs not in (1,2):
+    if num_hdrs == 0:
+        raise TextStructureError("Header line is missing")
+    if num_hdrs not in (1, 2):
         raise TextStructureError("Text needs to have 1 or 2 ---[Headers]--- present")
 
     if num_hdrs == 2:
