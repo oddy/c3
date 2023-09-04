@@ -125,8 +125,9 @@ class SignVerify(object):
     #       we want CSR loads to be different to "just sign a payload" because we want to have the
     #       option of e.g. adjusting the wanted expiry date, etc.
 
-    def make_csr(self, name, expiry, cert_type=None):
+    def make_csr(self, name, expiry, cert_type=None, key_type=None):
         expiry = parsedate.ParseBasicDate(expiry)
+        key_type = ParseKeyType(key_type)     # from constants
         ce = certentry.CertEntry(self)
         ce.pub_type = PUB_CSR
         ce.name = name
@@ -134,10 +135,10 @@ class SignVerify(object):
         #cert_id = name.encode("ascii")  # if we want deterministic cert_ids e.g. for testing
         cert_id = structure.gen_ulid()
         today = datetime.date.today()
-        key_priv, key_pub = keypairs.generate(keytype=KT_ECDSA_SECP256K1)
+        key_priv, key_pub = keypairs.generate(keytype=key_type)
 
         ce.cert = AttrDict(public_key=key_pub, subject_name=name, cert_id=cert_id, issued_date=today,
-                           key_type=KT_ECDSA_SECP256K1, expiry_date=expiry, cert_type=cert_type)
+                           key_type=key_type, expiry_date=expiry, cert_type=cert_type)
 
         ce.priv_key_bytes = key_priv
         # Note: we don't set ce.epriv_block here, user must call encrypt() or nopassword() to make

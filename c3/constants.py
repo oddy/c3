@@ -34,8 +34,29 @@ PRIVTYPE_BARE = 1
 PRIVTYPE_PASS_PROTECT = 2
 KT_ECDSA_PRIME256V1 = 1
 KT_ECDSA_SECP256K1 = 2      # the bitcoin one, for which fast implementations exist
+KT_NACL_SIGN = 3
 KNOWN_PRIVTYPES = [1, 2]
-KNOWN_KEYTYPES = [1]
+KNOWN_KEYTYPES = [1, 2, 3]
+
+# -------------------------------------
+# - This was secp256k1 before Sep2023 -
+DEFAULT_KEYTYPE = KT_NACL_SIGN
+# DEFAULT_KEYTYPE = KT_ECDSA_SECP256K1
+# -------------------------------------
+
+KEY_TYPE_NAMES = {              # todo: their other popular names, nice printing, etc.
+    "nacl" : KT_NACL_SIGN,
+    "prime256v1" : KT_ECDSA_PRIME256V1,
+    "secp256k1" : KT_ECDSA_SECP256K1,
+}
+
+def ParseKeyType(kt_str):
+    if not kt_str:
+        return DEFAULT_KEYTYPE
+    kts = kt_str.lower()
+    if kts in KEY_TYPE_NAMES:            # exact
+        return KEY_TYPE_NAMES[kts]
+    raise ValueError("Unknown keytype (options: " + ",".join(KEY_TYPE_NAMES) + ")")
 
 
 # --- Public-Part data structures ---

@@ -24,7 +24,7 @@ def CommandlineMain(cmdline_str=""):
         # --- CSR / certchain pipeline ---
         if cmd == "make":
             # --- pub cert (signing request) ---
-            csr = c3m.make_csr(name=args.name, expiry=args.expiry, cert_type=args.type)
+            csr = c3m.make_csr(name=args.name, expiry=args.expiry, cert_type=args.type, key_type=args.keytype)
             # --- private key (encrypt) ---
             if "nopassword" in args:
                 csr.private_key_set_nopassword()
@@ -122,7 +122,7 @@ class ArgvArgs(dict):
             if z:
                 k, v = z.groups()
                 self[k] = v
-        self.optional_args = ["type", "parts"]
+        self.optional_args = ["type", "parts", "keytype"]
     def __getattr__(self, name):
         if name not in self:
             if name in self.optional_args:
