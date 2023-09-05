@@ -41,7 +41,6 @@ KNOWN_KEYTYPES = [1, 2, 3]
 # -------------------------------------
 # - This was secp256k1 before Sep2023 -
 DEFAULT_KEYTYPE = KT_NACL_SIGN
-# DEFAULT_KEYTYPE = KT_ECDSA_SECP256K1
 # -------------------------------------
 
 KEY_TYPE_NAMES = {              # todo: their other popular names, nice printing, etc.
