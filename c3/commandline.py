@@ -66,7 +66,11 @@ def CommandlineMain(cmdline_str=""):
 
         # --- Load & verify ---
         if cmd == "verify":
-            c3m.load_trusted_cert(filename=args.trusted)
+            if isinstance(args.trusted, list):
+                for trusted in args.trusted:
+                    c3m.load_trusted_cert(filename=trusted)
+            else:
+                c3m.load_trusted_cert(filename=args.trusted)
             ce = c3m.load(filename=args.name)
             if c3m.verify(ce):
                 print("\nVerify OK")
@@ -97,13 +101,13 @@ def Usage(msg=""):
     help_txt = """%s
 Usage:
     c3 make        --name=root1  --expiry="24 oct 2024" 
-    c3 signcert    --name=root1  --using=self           
+    c3 signcert    --name=root1  --using=self  --link=[name|append]  
     c3 make        --name=inter1 --expiry="24 oct 2024"
     c3 signcert    --name=inter1 --using=root1
     c3 signpayload --payload=payload.txt --using=inter1
-    c3 verify      --name=payload.txt    --trusted=root1
+    c3 verify      --name=payload.txt    --trusted=root1  --trusted=inter1
     make options   --type=rootcert --parts=split/combine --nopassword=y
-    sign options   --link=name/append
+    Note: if multiple --trusted specified for verify, ensure root is first. 
     """ % (msg,)
     print(help_txt)
 
@@ -122,7 +126,14 @@ class ArgvArgs(dict):
             z = re.match(r"^--(\w+)=(.+)$", arg)
             if z:
                 k, v = z.groups()
-                self[k] = v
+                if k not in self:
+                    self[k] = v
+                else:
+                    # make a list if multiple arguments with the same name are provided
+                    if isinstance(self[k], list):
+                        self[k].append(v)
+                    else:
+                        self[k]  = [self[k], v]
         self.optional_args = ["type", "parts", "keytype"]
     def __getattr__(self, name):
         if name not in self:
