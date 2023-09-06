@@ -41,10 +41,11 @@ def CommandlineMain(cmdline_str=""):
 
         if cmd == "signcert":
             to_sign = c3m.load(filename=args.name)
-            if args.using == "self":
+            if args.using == "self" or args.using == args.name:
                 signer = to_sign
             else:
                 signer = c3m.load(filename=args.using)
+            # todo: twiddle to_sign's expiry date if args.expiry exists. (ie, 'renew')
             link_by_name = "link" in args and args.link == "name"
             signer.private_key_decrypt_user()
             c3m.sign(to_sign, signer, link_by_name)

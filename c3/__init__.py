@@ -19,6 +19,6 @@ __all__ = [
 # - dual/multi passwords for private keys
 # - Visible Fields support for PRIV_CRCWRAP_SCHEMA
 # - it would be nice if the text description included whether things were CSRs etc
-
+# - add --expiry override to sign for Renew operations.
 
 
