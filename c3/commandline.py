@@ -40,8 +40,8 @@ def CommandlineMain(cmdline_str=""):
             return
 
         if cmd == "signcert":
-            to_sign = c3m.load(filename=args.name)
-            if args.using == "self" or args.using == args.name:
+            to_sign = c3m.load(filename=args.file)
+            if args.using == "self" or args.using == args.file:
                 signer = to_sign
             else:
                 signer = c3m.load(filename=args.using)
@@ -71,7 +71,7 @@ def CommandlineMain(cmdline_str=""):
                     c3m.load_trusted_cert(filename=trusted)
             else:
                 c3m.load_trusted_cert(filename=args.trusted)
-            ce = c3m.load(filename=args.name)
+            ce = c3m.load(filename=args.file)
             if c3m.verify(ce):
                 print("\nVerify OK")
             return
@@ -100,13 +100,14 @@ def CommandlineMain(cmdline_str=""):
 def Usage(msg=""):
     help_txt = """%s
 Usage:
-    c3 make        --name=root1  --expiry="24 oct 2024" 
-    c3 signcert    --name=root1  --using=self  --link=[name|append]  
+    c3 make        --name=root1  --expiry="24 oct 2024"  (writes root1.b64.txt) 
+    c3 signcert    --file=root1.b64.txt  --using=self  --link=[name|append]  
     c3 make        --name=inter1 --expiry="24 oct 2024"
-    c3 signcert    --name=inter1 --using=root1
-    c3 signpayload --payload=payload.txt --using=inter1
-    c3 verify      --name=payload.txt    --trusted=root1  --trusted=inter1
+    c3 signcert    --file=inter1.b64.txt --using=root1.b64.txt
+    c3 signpayload --payload=payload.txt --using=inter1.b64.txt  (writes payload.txt.public.b64.txt)
+    c3 verify      --file=payload.txt.public.b64.txt --trusted=root1.b64.txt --trusted=inter1.b64.txt
     make options   --type=rootcert --parts=split/combine --nopassword=y
+    for --file use --file="xxxx.*" when there are seperate .public. and .PRIVATE. files
     Note: if multiple --trusted specified for verify, ensure root is first. 
     """ % (msg,)
     print(help_txt)
