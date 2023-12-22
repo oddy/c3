@@ -22,6 +22,8 @@ except AttributeError:                  # py2
 
 # ============================== File Saving/Loading ===========================================
 
+header_rex = r"^-+\[ (.*?) \]-+$"
+
 def asc_header(msg):
     m2 = "[ %s ]" % msg
     offs = 37 - len(m2) // 2
@@ -61,7 +63,6 @@ def make_priv_txt_str_ce(ce, desc):     # note no vis_map yet
 
 def split_text_pub_priv(text_in):
     # regex cap the header lines
-    header_rex = r"^-+\[ (.*?) \]-+$"
     hdrs = list(re.finditer(header_rex, text_in, re.MULTILINE))
     num_hdrs = len(hdrs)
     pub_text_block = ""
@@ -96,16 +97,75 @@ def split_text_pub_priv(text_in):
 # because the uniloader then processes the text, does splitting, etc later
 # (Because it may and does often get called with text strings directly).
 
+
+# signverify.load() calls us if the given filename endswith .b64, .txt or .*
+# Policy: 2024 behaviour - user supplies explicit filename. Only do old "magic load multiple files"
+#         behaviour if user supplies filename fragment with .* on the end.
+
+def load_files(name):
+    namel = name.lower()
+    parts_combined = False
+    both_text_block = ""
+    pub_text_block = ""
+    priv_text_block = ""
+    if not name.endswith(".*") and not os.path.isfile(name):
+        raise ValueError("file not found %s" % (name,))
+    if name.endswith(".*"):
+        both_text_block, parts_combined = load_files_wildcard(name)
+    elif ".public." in namel:
+        pub_text_block = load_file_public(name)
+    elif ".private." in namel:
+        priv_text_block = load_file_private(name)
+    else:
+        both_text_block = load_file_combined(name)
+        parts_combined = True
+
+    if not both_text_block:
+        both_text_block = pub_text_block + "\n\n" + priv_text_block
+    return both_text_block, parts_combined
+
+
+def load_file_public(pub_only_name):
+    pub_text_block = open(pub_only_name, "r").read()
+    hdrs = list(re.finditer(header_rex, pub_text_block, re.MULTILINE))
+    if len(hdrs) != 1:
+        raise TextStructureError("too %s headers in public file" % ("many" if len(hdrs) > 1 else "few"))
+    return pub_text_block
+
+def load_file_private(priv_only_name):
+    priv_text_block = open(priv_only_name, "r").read()
+    hdrs = list(re.finditer(header_rex, priv_text_block, re.MULTILINE))
+    if len(hdrs) != 1:
+        raise TextStructureError(" Warning: too %s headers in public file" % ("many" if len(hdrs) > 1 else "few"))
+    return priv_text_block
+
+def load_file_combined(combine_name):
+    both_text_block = open(combine_name, "r").read()
+    hdrs = list(re.finditer(header_rex, both_text_block, re.MULTILINE))
+    if len(hdrs) != 2:
+        raise TextStructureError("Number of headers in combined file is not 2")
+    return both_text_block
+
+
+
+
+# This is the old behaviour, where users had to remember to take the extensions off themselves
+# when doing e.g. --using= args for signing, which was annoying. Now it only happens if the user
+# --using=blah.* specifically.
+
 # Policy: both members of split do not have to exist. (often pub no priv)
 # Policy: combined and split are mutually exclusive, should raise an error.
 
-def load_files(name):
-    header_rex = r"^-+\[ (.*?) \]-+$"
+def load_files_wildcard(name):
     both_text_block = ""
     pub_text_block = ""
     priv_text_block = ""
     file_found = False
     parts_combined = False
+
+    if not name.endswith(".*"):     # sanity
+        raise ValueError("load_file_wildcard called but name not xxx.*")
+    name = name[:-2]        # chop the .*
 
     combine_name = name + ".b64.txt"
     if os.path.isfile(combine_name):

@@ -51,10 +51,13 @@ class SignVerify(object):
         pub_vf_lines = ""
         payload_dict = {}
 
-        # Note: this if-flow works because text_file, text, and block are mutually exclusive
-        # --- LOAD from aguments ---
+        # Note: this if-flow works because text_file, text, and block are mutually exclusive fn args
         if filename:
-            text, ce.files_combined = textfiles.load_files(filename)
+            fnl = filename.lower()
+            if fnl.endswith(".b64") or fnl.endswith(".txt") or fnl.endswith(".*"):
+                text, ce.files_combined = textfiles.load_files(filename)
+            else:
+                block = open(filename, "rb").read()
 
         if text:  # Text is EITHER, public text, private text, or both texts concatenated.
             ce.pub_text, ce.epriv_text = textfiles.split_text_pub_priv(text)
@@ -236,7 +239,7 @@ class SignVerify(object):
     # ============ Verify ==========================================================================
 
     # In: Data-And-Sigs items list
-    # Out: payload bytes or an Exception
+    # Out: True or an Exception
 
     # Apart from actual signature fails, there are 3 other ways for this to fail:
     # 1) unnamed issuer cert and no next cert in line aka "fell off the end" (ShortChainError)
