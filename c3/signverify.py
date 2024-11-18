@@ -38,8 +38,9 @@ class SignVerify(object):
 
     # I think the file loaders can now be really basic.
     # Because all the smarts is in the text processor right here below.
-    # Just open the files and read them and dump them into a single text variable. The filenames
-    # dont actually matter to us, what drives public/private is the "PRIVATE" in the header line.
+    # Just open the files and read them and dump them into a single text variable.
+    # what drives public/private is the "PRIVATE" in the header line.
+    # The filenames only matter for txt-vs-binary (text is if extensions  .txt .b64 or .*)
     # (that's also the only text part that controls anything, everything else is in the binary blocks.)
 
     # Policy: not supporting Visible Fields for the private block atm.
