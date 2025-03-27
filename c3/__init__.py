@@ -1,8 +1,9 @@
 
 # Compact Crypto Certs (C3) Public API
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
+# 1.1.3 Text loading correctly handles windows CRLFs
 # 1.1.2 Commandline file loading is simpler and more explicit now
 # 1.1.1 Ability for Verify commandline to specify multiple --trusted to simulate multiple certs
 #       being loaded into a trust store.
