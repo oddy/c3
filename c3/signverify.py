@@ -61,6 +61,7 @@ class SignVerify(object):
                 block = open(filename, "rb").read()
 
         if text:  # Text is EITHER, public text, private text, or both texts concatenated.
+            text = text.replace("\r\n","\n")      # normalise windows CRLFs if any
             ce.pub_text, ce.epriv_text = textfiles.split_text_pub_priv(text)
             if ce.pub_text:
                 ce.pub_block, pub_vf_lines = textfiles.text_to_binary_block(ce.pub_text)
