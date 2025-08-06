@@ -40,3 +40,8 @@ def ParseBasicDate(txt):
 
     return datetime.date(day=day, month=mon, year=year)
 
+def DateToStr(dd):
+    return dd.strftime('%d %b %Y').lower()
+
+
+

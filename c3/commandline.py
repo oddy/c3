@@ -4,11 +4,12 @@
 
 from __future__ import print_function
 
-import sys, re, datetime, shlex
+import sys, re, shlex, base64
 from pprint import pprint
 
 from c3.signverify import SignVerify
 from c3.errors import NoPassword
+from c3.parsedate import DateToStr
 
 # Use cases:
 # * Make license (sign),  verify license
@@ -76,8 +77,21 @@ def CommandlineMain(cmdline_str=""):
                 print("\nVerify OK")
             return
 
+
         if cmd == "load":
-            x = c3m.load(filename=args.name)
+            if 'blockfile' in args:
+                x = c3m.load(block=open(args.blockfile,"rb").read())
+            elif "base64blockfile" in args:
+                b64 = open(args.base64blockfile,"rb").read()
+                bins = base64.b64decode(b64)
+                x = c3m.load(block=bins)
+            elif "filename" in args:
+                x = c3m.load(filename=args.filename)
+            elif "name" in args:
+                x = c3m.load(filename=args.name)
+            else:
+                print("Need one of --blockfile=  --base64blockfile=  --filename=")
+                return
             print("pub_type ", x.pub_type)
             print("chain    ")
             pprint(x.chain)
@@ -85,8 +99,29 @@ def CommandlineMain(cmdline_str=""):
             print(x.payload)
             return
 
+        if cmd == "printchain":
+            if 'blockfile' in args:
+                x = c3m.load(block=open(args.blockfile,"rb").read())
+            elif "base64blockfile" in args:
+                b64 = open(args.base64blockfile,"rb").read()
+                bins = base64.b64decode(b64)
+                x = c3m.load(block=bins)
+            elif "filename" in args:
+                x = c3m.load(filename=args.filename)
+            else:
+                print("Need one of --blockfile=  --base64blockfile=  --filename=")
+                return
+            lines = x.strchain()
+            for line in lines:
+                print(line)
+            return
+
+
         Usage()
         print("Unknown Command %r" % cmd)
+
+
+
 
     except Exception as e:
         if "debug" in args:
@@ -108,7 +143,8 @@ Usage:
     c3 verify      --file=payload.txt.public.b64.txt --trusted=root1.b64.txt --trusted=inter1.b64.txt
     make options   --type=rootcert --parts=split/combine --nopassword=y
     for --file use --file="xxxx.*" when there are seperate .public. and .PRIVATE. files
-    Note: if multiple --trusted specified for verify, ensure root is first. 
+    Note: if multiple --trusted specified for verify, ensure root is first.
+    c3 printchain  --filename (txt files) OR --blockfile (binary) OR --base64blockfile  (base64-only file) 
     """ % (msg,)
     print(help_txt)
 

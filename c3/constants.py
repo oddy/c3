@@ -73,6 +73,7 @@ CERT_SCHEMA = (
 SIG_SCHEMA = (
     (b3.BYTES, "signature", 0,  True),
     (b3.BYTES, "signing_cert_id", 1, False),  # value can be empty.
+    (b3.UTF8,  "signing_cert_name", 2, False),   # cosmetic! For users to read. Not used by signing/verifying (only signing_cert_id is used).
 )
 
 DATASIG_SCHEMA = (

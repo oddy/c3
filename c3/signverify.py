@@ -197,7 +197,8 @@ class SignVerify(object):
 
         # build our chain with 'payload'&sig + signers chain
         signer_cert_id = signer.cert.cert_id if (link_by_name or self_signing) else b""
-        datasig = self.make_datasig(payload, sig_bytes, signer_cert_id)
+        signer_cert_name = signer.cert.subject_name if (link_by_name or self_signing) else ""
+        datasig = self.make_datasig(payload, sig_bytes, signer_cert_id, signer_cert_name)
 
         ce.chain = [datasig]
         if not (link_by_name or self_signing):
@@ -218,8 +219,9 @@ class SignVerify(object):
 
     # --- Binary operations for sign() ---
 
-    def make_datasig(self, payload_bytes, sig_bytes, signer_cert_id):
-        sig_d = AttrDict(signature=sig_bytes, signing_cert_id=signer_cert_id)
+    # Note: name is cosmetic for usability, cert_id is what is used for chain operations.
+    def make_datasig(self, payload_bytes, sig_bytes, signer_cert_id, signer_cert_name):
+        sig_d = AttrDict(signature=sig_bytes, signing_cert_id=signer_cert_id, signing_cert_name=signer_cert_name)
         sig_part = b3.schema_pack(SIG_SCHEMA, sig_d)
         datasig = AttrDict(data_part=payload_bytes, sig_part=sig_part)
         return datasig

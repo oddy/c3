@@ -6,7 +6,7 @@ from c3.errors import *
 from c3 import textfiles
 from c3 import structure
 from c3 import getpassword
-
+from c3.parsedate import DateToStr
 from c3.structure import AttrDict
 
 # --- Data output classes ---
@@ -143,6 +143,25 @@ class CertEntry(object):
     def vnames(self):
         return "/"+"/".join([self.blankify(i, "subject_name") for i in self.vchain()])
 
+    # output self.chain as user-friendly text lines. e.g:
+    # cert: 'manisign_appv'       type None      expires 01 aug 2025  issued 13 nov 2024  signed-by <next>
+    # cert: 'buildroot24'         type 'build'   expires 01 nov 2026  issued 11 jun 2024  signed-by id:018a680701f23b5bab9df7220f00160f
+    def strchain(self):
+        ret = []
+        for datasig in self.chain:  # datasig
+            sig = datasig.sig
+            cer = datasig.cert
+            if sig.signing_cert_id == b'' or sig.signing_cert_id is None:
+                signedby = "<next>"
+            else:
+                if sig.signing_cert_name:
+                    signedby = f'"{sig.signing_cert_name}"  id:{sig.signing_cert_id.hex()}'
+                else:
+                    signedby = f'id:{sig.signing_cert_id.hex()}'
+            certxt = f'{repr(cer.subject_name):20}   type {repr(cer.cert_type):8}   expires {DateToStr(cer.expiry_date)}   issued {DateToStr(cer.issued_date)}'
+            dstxt = f'cert: {certxt}   signed-by {signedby}'
+            ret.append(dstxt)
+        return ret
 
     # ============== Private key encrypt ===================================================
 
