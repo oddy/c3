@@ -1,11 +1,13 @@
 
 # Compact Crypto Certs (C3) Public API
 
-__version__ = "1.1.3"
+__version__ = "1.1.4"
 
-# 1.1.3 Text loading correctly handles windows CRLFs
-# 1.1.2 Commandline file loading is simpler and more explicit now
-# 1.1.1 Ability for Verify commandline to specify multiple --trusted to simulate multiple certs
+# 1.1.4 signing cert names now stored in sig along with cert ids,
+#       'c3 printchain' to pretty-print a CE's cert chain to see who signed what.
+# 1.1.3 Text loading correctly handles windows CRLFs.
+# 1.1.2 Commandline file loading is simpler and more explicit now.
+# 1.1.1 Ability for Verify commandline to specify multiple --trusted to simulate multiple certs.
 #       being loaded into a trust store.
 # 1.1.0 Added NaCl-sign keytype (is default keytype now). pass_protect now uses pynacl.
 # 1.0.8 Initial release
