@@ -1,8 +1,9 @@
 
 # Compact Crypto Certs (C3) Public API
 
-__version__ = "1.1.4"
+__version__ = "1.1.5"
 
+# 1.1.5 --newexpiry= arg for signcert command to support in-place renewal.
 # 1.1.4 signing cert names now stored in sig along with cert ids,
 #       'c3 printchain' to pretty-print a CE's cert chain to see who signed what.
 # 1.1.3 Text loading correctly handles windows CRLFs.

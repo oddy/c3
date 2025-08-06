@@ -9,7 +9,7 @@ from pprint import pprint
 
 from c3.signverify import SignVerify
 from c3.errors import NoPassword
-from c3.parsedate import DateToStr
+from c3.parsedate import DateToStr, ParseBasicDate
 
 # Use cases:
 # * Make license (sign),  verify license
@@ -41,14 +41,21 @@ def CommandlineMain(cmdline_str=""):
             return
 
         if cmd == "signcert":
+            new_expiry = ParseBasicDate(args.newexpiry) if 'newexpiry' in args else None  # aka renew
+            link_by_name = "link" in args and args.link == "name"
+
             to_sign = c3m.load(filename=args.file)
+
             if args.using == "self" or args.using == args.file:
                 signer = to_sign
             else:
                 signer = c3m.load(filename=args.using)
-            # todo: twiddle to_sign's expiry date if args.expiry exists. (ie, 'renew')
-            link_by_name = "link" in args and args.link == "name"
+
             signer.private_key_decrypt_user()
+            if new_expiry:
+                print(f"Renewing: expiry {DateToStr(to_sign.cert.expiry_date)}  ->  {DateToStr(new_expiry)}")
+                to_sign.cert["expiry_date"] = new_expiry
+
             c3m.sign(to_sign, signer, link_by_name)
             to_sign.write_files(args.parts, True)
             print("Success!")
@@ -138,13 +145,15 @@ Usage:
     c3 make        --name=root1  --expiry="24 oct 2024"  (writes root1.b64.txt) 
     c3 signcert    --file=root1.b64.txt  --using=self  --link=[name|append]  
     c3 make        --name=inter1 --expiry="24 oct 2024"
-    c3 signcert    --file=inter1.b64.txt --using=root1.b64.txt
+    c3 signcert    --file=inter1.b64.txt --using=root1.b64.txt  ( --newexpiry="24 oct 2024" )
     c3 signpayload --payload=payload.txt --using=inter1.b64.txt  (writes payload.txt.public.b64.txt)
     c3 verify      --file=payload.txt.public.b64.txt --trusted=root1.b64.txt --trusted=inter1.b64.txt
+    c3 printchain  --filename (txt files) OR --blockfile (binary) OR --base64blockfile  (base64-only file)
     make options   --type=rootcert --parts=split/combine --nopassword=y
     for --file use --file="xxxx.*" when there are seperate .public. and .PRIVATE. files
     Note: if multiple --trusted specified for verify, ensure root is first.
-    c3 printchain  --filename (txt files) OR --blockfile (binary) OR --base64blockfile  (base64-only file) 
+    Note: for renew, use signcert with --newexpiry=
+ 
     """ % (msg,)
     print(help_txt)
 
