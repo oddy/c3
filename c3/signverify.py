@@ -292,6 +292,12 @@ class SignVerify(object):
                 keypairs.verify(next_cert, das.data_part, das.sig.signature)
             except Exception:       # wrap theirs with our own error class
                 raise InvalidSignatureError(structure.ctnm(das)+"Signature failed to verify")
+
+            # --- Extra checks ---
+            if "cert" in das:                                     # if its a cert,
+                if das.cert.issued_date > next_cert.expiry_date:  # and issued after signer expiry
+                    raise IssuedAfterSignerExpiryError(structure.ctnm(das)+"cert issued after signer expired")
+
             # --- Now do next das in line ---
 
         # Chain verifies completed without problems. Make sure we got to a trust store cert.

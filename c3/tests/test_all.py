@@ -17,6 +17,7 @@ from c3 import commandline
 # A way-future expiry date so the tests dont break too often
 FUTURE = "24 october 2030"
 INTER_FUTURE = "24 oct 2030"
+AFTER_FUTURE = "24 october 2035"  # used by issued-after-expiry test
 
 @pytest.fixture
 def c3m():
@@ -135,6 +136,29 @@ def test_sign_expired(c3m):
     expi = c3m.make_csr(name="expi", expiry="24 oct 2002")
     with pytest.raises(CertExpired):
         c3m.sign(expi, expi)
+
+# --- ensure issued cant be > signer's expired time ---
+def test_issued_after_expiry(c3m, ce1):
+    hack_ce = c3m.make_csr("hax", "25 oct 2039")  # sets issued=today
+    # attacker: override issued_date
+    hack_ce.cert["issued_date"] = datetime.date(2045, 12, 12)
+    # attacker: repack cert
+    hack_cert_block = b3.schema_pack(CERT_SCHEMA, hack_ce.cert)
+    hack_ce.pub_block = b3.encode_item_joined(PUB_CSR, b3.DICT, hack_cert_block)
+    # sign it.
+    # Note: sign() doesn't block this case, because that would be pointless when attackers are
+    #       bypassing sign anyway. The important check must be in verify().
+    signer = ce1
+    c3m.sign(hack_ce, signer)
+    hack_block = hack_ce.pub.as_binary()    # simulate transmission
+
+    # now verify (should fail)
+    c3m.load_trusted_cert(block=ce1.pub.as_binary())
+    hack_ce2 = c3m.load(block=hack_block)
+
+    with pytest.raises(IssuedAfterSignerExpiryError):
+        c3m.verify(hack_ce2)
+
 
 # ----- Inter cert signing / verifying ----
 

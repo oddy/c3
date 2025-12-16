@@ -21,6 +21,8 @@ class UntrustedChainError(VerifyError):  # the chain ends with a self-sign we do
     pass
 class TamperError(VerifyError):     # visible Fields are present in the textual file,
     pass                             #   but don't match up with the secure fields
+class IssuedAfterSignerExpiryError(VerifyError):  # hacked cert issued after it's signer's expiry date
+    pass
 class SignError(C3Error):
     pass
 class OutputError(C3Error):         # cant output a CE for some reason - usually bc private key not encrypted
